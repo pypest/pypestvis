@@ -2082,12 +2082,12 @@ requires-dist = [
     { name = "flopy" },
     { name = "geopandas" },
     { name = "ipywidgets" },
-    { name = "jupyterlab", marker = "extra == 'extra'", specifier = ">=4.4.9" },
+    { name = "jupyterlab", marker = "extra == 'extra'" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "plotly" },
     { name = "pyemu", git = "https://github.com/pypest/pyemu?rev=develop" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.4.2" },
+    { name = "pytest", marker = "extra == 'test'" },
     { name = "shapely" },
 ]
 provides-extras = ["test", "extra"]
