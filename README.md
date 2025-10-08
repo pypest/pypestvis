@@ -27,4 +27,6 @@ Build layout (in jupyter)
 ```python
 display(vh.default_map_layout)
 ```
+<img src="ppveg.png" width="100%">
+
 Check out [notebook](examples/freyberg.ipynb) for a full example.
