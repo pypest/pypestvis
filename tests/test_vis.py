@@ -1,11 +1,8 @@
 import shutil
-
 import pytest
 import pyemu
 import pandas as pd
 from pathlib import Path
-
-from _pytest import mark
 
 import pypestvis as ppv
 
