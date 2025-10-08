@@ -1,0 +1,15 @@
+pest_file,model_file
+dummy_par.csv.ins,dummy_par.csv
+hds_0_0_0.csv.ins,hds_0_0_0.csv
+boundout_ghbt_top.csv.ins,boundout_ghbt_top.csv
+boundout_chd_shore.csv.ins,boundout_chd_shore.csv
+boundout_ghbb_base.csv.ins,boundout_ghbb_base.csv
+boundout_ghbs_sea.csv.ins,boundout_ghbs_sea.csv
+fluxlist.csv.ins,fluxlist.csv
+l_baseflux.ins,fluxlist.csv
+g_baseflux.ins,fluxlist.csv
+lhgzsi.npf_k.txt.ins,lhgzsi.npf_k.txt
+top_ghb_0.txt.ins,top_ghb_0.txt
+btm_ghb_0.txt.ins,btm_ghb_0.txt
+sea_ghb_0.txt.ins,sea_ghb_0.txt
+chd_0.txt.ins,chd_0.txt

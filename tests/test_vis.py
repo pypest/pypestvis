@@ -22,7 +22,7 @@ def test_lh():
     """
     Test the visualization utilities in pyemu.
     """
-    m_d = Path('..', "examples", "lh_ies")
+    m_d = Path('..', "examples", "lheg_ies")
     pst = pyemu.Pst(str(m_d / "lhgzsi.pst"))
     obs = pst.observation_data
     scenmap = pd.read_csv(Path(m_d, "scenario.csv")).set_index('kper')
@@ -48,8 +48,8 @@ def test_lh():
     vh._cell_sel_id = 5408
     vh.highlight_cell()
     vh.update_maphisto()
-    vh.mapselector.value = vh.mapselector.options[3]
-    vh.mapselector.value = vh.mapselector.options[1]
+    vh.unmapgroupselector.value = vh.unmapgroupselector.options[vh.unmapgroupselector.index+1]
+    vh.unmapgroupselector.value = vh.unmapgroupselector.options[vh.unmapgroupselector.index+1]
     vh.wobselector.value = not vh.wobselector.value
     vh.set_map()
 

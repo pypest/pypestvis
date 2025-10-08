@@ -327,6 +327,10 @@ class VisHandler(object):
             ens = pd.concat({0: ens}, axis=1, names=['iteration'])
         # handy lookup for realizations for each iteration
         self.real_dict = ens.columns.to_frame(False).groupby('iteration').realization.unique().to_dict()
+        try:
+            noise = self.pst.ies.noise.T
+        except Exception:
+            noise = None
         for gp, obdf in obs.groupby(self.groupby):
             gph = VisGroupHandler(obdf, mg=self.mg, ens=ens, tidx=self.tidx)
             if gph.mapable == 'grid':
@@ -338,7 +342,10 @@ class VisHandler(object):
             if any(obdf.weight != 0):
                 wobs = obdf.loc[obdf.weight != 0]
                 # todo: catch and forgive absent noise ensembles
-                self.obsval_dict[gp] = self.pst.ies.noise[wobs.index].T
+                if noise is not None and len(wobs.index.intersection(noise.index)) > 0:
+                    self.obsval_dict[gp] = noise.loc[wobs.index, :]
+                else:
+                    self.obsval_dict[gp] = pd.DataFrame(index=wobs.index, data=wobs.obsval.values)
             self.obs_dict[gp] = gph
         pass
 

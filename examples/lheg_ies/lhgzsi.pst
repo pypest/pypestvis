@@ -1,0 +1,28 @@
+pcf version=2
+* control data keyword
+pestmode                                 estimation
+noptmax                                 6
+svdmode                                 1
+maxsing                          10000000
+eigthresh                           1e-06
+eigwrite                                1
+ies_par_en                     pe.bin
+save_dense                     true
+ies_num_threads                13
+ies_enforce_bounds             true
+ies_phi_factor_file            phifacs.csv
+ies_obs_en                     obs+noise.bin
+ies_multimodal_alpha           0.25
+ies_num_reals                  1000
+* parameter groups external
+lhgzsi.pargp_data.csv
+* parameter data external
+lhgzsi.par_data.csv
+* observation data external
+lhgzsi.obs_data.csv
+* model command line
+python forward_run.py
+* model input external
+lhgzsi.tplfile_data.csv
+* model output external
+lhgzsi.insfile_data.csv
