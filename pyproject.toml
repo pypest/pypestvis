@@ -22,6 +22,8 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "pytest",
+    "pytest-cov",
+    "pytest-xdist",
 ]
 extra = [
     "jupyterlab",
@@ -33,3 +35,6 @@ build-backend = "uv_build"
 
 [tool.uv.sources]
 pyemu = { git = "https://github.com/pypest/pyemu", rev = "develop" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
