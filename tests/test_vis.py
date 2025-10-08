@@ -10,7 +10,7 @@ def test_freyberg():
     """
     Test the visualization utilities for freyberg.
     """
-    m_d = Path('..', "examples", "freyberg_ies")
+    m_d = Path("examples", "freyberg_ies")
     pst = pyemu.Pst(str(m_d / "freyberg.pst"))
     obs = pst.observation_data
     obs.loc[obs.oname=='hds', ['k', 'i', 'j']] = obs.loc[obs.oname=='hds'].obgnme.str.rsplit("_",expand=True, n=3)[[1,2,3]].values
@@ -22,7 +22,7 @@ def test_lh():
     """
     Test the visualization utilities in pyemu.
     """
-    m_d = Path('..', "examples", "lheg_ies")
+    m_d = Path("examples", "lheg_ies")
     pst = pyemu.Pst(str(m_d / "lhgzsi.pst"))
     obs = pst.observation_data
     scenmap = pd.read_csv(Path(m_d, "scenario.csv")).set_index('kper')
