@@ -65,7 +65,7 @@ def get_mg_mt(d):
     """
     import flopy
     from pathlib import Path
-
+    # TODO: more flexiblity around modelgrid and time definitions -- less reliance on mf6/flopy and unstruct options?
     d = Path(d)
     try:
         sim = flopy.mf6.MFSimulation.load(
@@ -89,7 +89,7 @@ def get_mg_mt(d):
             with open(d / 'modeltime.pkl', 'rb') as f:
                 mt = pickle.load(f)
         except FileNotFoundError:
-            mt = None
+            mt = None   # todo: more flexiblity downstream when there is not modeltime info
             warnings.warn("Can't load model time object")
     return mg, mt
 

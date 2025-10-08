@@ -1,7 +1,11 @@
+import shutil
+
 import pytest
 import pyemu
 import pandas as pd
 from pathlib import Path
+
+from _pytest import mark
 
 import pypestvis as ppv
 
@@ -18,11 +22,21 @@ def test_freyberg():
     vh = ppv.VisHandler(pst, wd=m_d)
     pass
 
-def test_lh():
+
+@pytest.mark.parametrize("option", ['model', 'grb', 'pkl'])
+def test_lh(tmp_path, option):
     """
     Test the visualization utilities in pyemu.
     """
     m_d = Path("examples", "lheg_ies")
+    shutil.copytree(m_d, tmp_path/m_d.name)
+    m_d = tmp_path/m_d.name
+    if option != 'model':
+        for f in m_d.glob('*.nam'):
+            f.unlink()
+        if option == 'pkl':
+            for f in m_d.glob('*.grb'):
+                f.unlink()
     pst = pyemu.Pst(str(m_d / "lhgzsi.pst"))
     obs = pst.observation_data
     scenmap = pd.read_csv(Path(m_d, "scenario.csv")).set_index('kper')
