@@ -12,6 +12,7 @@ import ipywidgets as ipyw
 from plotly import graph_objects as go
 import warnings
 from shapely.geometry import shape
+from ipywidgets import VBox, HBox, Box, Layout
 
 from .utils import _guess_mappable, get_mg_mt, mg2geojson, _sort_key
 
@@ -158,6 +159,7 @@ class VisHandler(object):
             value=False,
             description="Weighted only",
             disabled=False if len(gridw) > 0 else True,
+            indent=False
         )
 
         self.mapselector = ipyw.RadioButtons(
@@ -171,12 +173,13 @@ class VisHandler(object):
             min=-1e30,
             max=1e30,
             step=100,
-            description='Colorscale range:',
+            description='cmap range:',
             disabled=False,
             continuous_update=False,
             orientation='horizontal',
             readout=True,
             readout_format='.2f',
+            style ={"description_width":'inital'},
         )
         self.vminmaxbutton = ipyw.Button(
             description='Reset range',
@@ -187,13 +190,15 @@ class VisHandler(object):
         )
         self.vminmaxbutton.on_click(self._reset_vminmax)
 
-        self.vminvmax = ipyw.VBox([self.vminmaxslider, self.vminmaxbutton])
+        self.vminvmax = VBox([self.vminmaxslider, self.vminmaxbutton])
 
         self.layselector = ipyw.Dropdown(
             options=[],
             value=None,
-            description='Layer:',
+            # description='Layer:',
             disabled=False,
+            layout={'width': '100px',
+                    'margin': '0px 20px 0px 0px'}
         )
 
         self.rpselector = ipyw.RadioButtons(
@@ -228,8 +233,10 @@ class VisHandler(object):
 
         self.iterselector = ipyw.Dropdown(
             options=zip(*[sorted(self.real_dict.keys())]*2),
-            description="Iteration: ",
-            value=sorted(self.real_dict.keys())[0]
+            # description="Iteration: ",
+            value=sorted(self.real_dict.keys())[0],
+            layout = {'width': '100px',
+                      'margin': '0px 20px 0px 0px'}
         )
         self.realselector = ipyw.Dropdown(options=sorted(self.real_dict[self.iterselector.value].tolist(), key=_sort_key),
                                           description="Realisation: ",
@@ -239,17 +246,25 @@ class VisHandler(object):
             options=pc.named_colorscales(),
             value='Plasma'.lower(),
             description='Colorscale:',
+            layout={"justify_content": "flex-start"},
+            style={'description_width': 'initial'}
         )
         self.cmapreverse = ipyw.Checkbox(
             value=False,
-            description="Reverse",
+            description="Reverse cmap",
             disabled=False,
-            layout={"align_self": "flex-start"}
+            layout={"align_self": "flex-start",
+                    "justify_content": "flex-start"},
+            indent = False
         )
 
         self.logselector = ipyw.Checkbox(value=False,
                                          description="Logscale",
-                                         disabled=False)
+                                         disabled=False,
+                                         layout={"align_self": "flex-start",
+                                                 "justify_content": "flex-start"},
+                                         indent=False
+                                         )
 
         self.rpselector.observe(self.rpchange, names=['value'])
 
@@ -385,16 +400,20 @@ class VisHandler(object):
                                                  width=600,
                                                  margin=dict(t=10, b=10, l=10, r=10),
                                                  yaxis2=dict(overlaying="y", range=[0,1], visible=False)))
+        unmaphisto.data[0].update(marker_color='rgba(112,112,112,0.75)')
+        unmaphisto.data[-1].update(marker_color='rgba(20,49,220,0.75)')
         unmaphisto.add_trace(go.Histogram(
             marker_color='rgba(0,0,0,0)',  # Transparent fill
             marker_line_color='red',  # Outline color
-            marker_line_width=2,
+            marker_line_width=1,
+            opacity=0.75,
             name=f"obs+noise",
             histnorm='probability density',
         ))
         unmaphisto.add_trace(go.Scatter(
             x=[None]*50, y=np.linspace(0,1,50),
-            line=dict(color='red', width=3, dash='dash'),
+            line=dict(color='red', width=2, dash='dash'),
+            opacity=0.75,
             name='obsval',
             yaxis='y2',
             showlegend=False,
@@ -535,10 +554,10 @@ class VisHandler(object):
         layout = go.Layout(map_style="carto-positron",
                            map_zoom=zoomlevel,
                            map_center={"lat": cc[1], "lon": cc[0]},  # {"lat": cc[1], "lon": cc[0]},
-                           legend_x=0,
+                           # legend_x=0,
                            height=600,
-                           width=720,
-                           margin=dict(t=10, b=50, l=10, r=150),
+                           # width=720,
+                           margin=dict(t=0, b=0, l=0, r=0),
                            autosize=True)
         cpmap = go.Choroplethmap(geojson=json,  # json with cell edges
                                 locations=[0] * len(json['features']),
@@ -567,16 +586,20 @@ class VisHandler(object):
                         margin=dict(t=10, b=10, l=10, r=10),
                         yaxis2=dict(overlaying="y", range=[0,1], visible=False))
         )
+        histo.data[0].update(marker_color='rgba(112,112,112,0.75)')
+        histo.data[-1].update(marker_color='rgba(20,49,220,0.75)')
         histo.add_trace(go.Histogram(
             marker_color='rgba(0,0,0,0)',  # Transparent fill
             marker_line_color='red',  # Outline color
-            marker_line_width=2,
+            marker_line_width=1,
+            opacity=0.75,
             name=f"obs+noise",
             histnorm='probability density',
         ))
         histo.add_trace(go.Scatter(x=[None] * 50, y=np.linspace(0, 1, 50),
                                    mode='lines',
-                                   line=dict(color='red', width=3, dash='dash'),
+                                   line=dict(color='red', width=2, dash='dash'),
+                                   opacity=0.75,
                                    name='obsval',
                                    yaxis='y2',
                                    showlegend=False,
@@ -762,24 +785,138 @@ class VisHandler(object):
 
     @property
     def default_map_layout(self):
-        mapbox = ipyw.VBox([
-            ipyw.HTML("<h1>Mappable Obs:</h1>"),
-            ipyw.Box([self.mapwidget,
-                      ipyw.VBox([self.layselector,
-                                 ipyw.HBox([self.cmapselector, self.cmapreverse]),
-                                 self.logselector,
-                                 self.vminmaxslider,
-                                 self.vminmaxbutton,
-                                 self.maphisto]),
-                      ipyw.VBox([self.wobselector,
-                                 self.mapselector]),
-                      ipyw.VBox([self.iterselector,
-                                 self.rpselector,
-                                 ipyw.HBox([self.pslider, self.realselector]),
-                                 ])]),
-            self.tslider
-        ])
-        return mapbox
+        # layer select box (label on top)
+        laysel_box = VBox(
+            [ipyw.Label("Layer:",
+                        layout={'align_self':'flex-start'}),
+            self.layselector],
+            layout=Layout(justify_content='flex-start')
+        )
+        csel_box = VBox(
+            [HBox([self.cmapselector, self.cmapreverse, self.logselector],
+                  layout=Layout(width='100%',
+                                display='flex',
+                                justify_content='flex-start',
+                                align_content='flex-start',
+                                align_items='flex-start')),
+             HBox([self.vminmaxslider, self.vminmaxbutton])],
+             layout=Layout(width='100%',
+                           display='flex',
+                           justify_content='flex-start',
+                           align_content='flex-start',
+                           align_items='flex-start',
+                           # border='2px solid black'
+                           )
+             )
+        sel0_box = Box([laysel_box, csel_box],
+                       layout=Layout(width='100%',
+                                     display='flex',
+                                     justify_content='flex-start',
+                                     align_content='flex-start',
+                                     align_items='flex-start',
+                                     justify_items='flex-start',
+                                     border='1px solid black'))
+        iter_box = Box([ipyw.Label("Iteration:",
+                        layout={'align_self':'flex-start'}),
+                        self.iterselector],
+                       layout=Layout(justify_content='flex-start'))
+        sel2_box = Box([VBox([self.wobselector,
+                   self.mapselector]),
+             VBox([iter_box,
+                   self.rpselector,
+                   HBox([self.pslider, self.realselector])])],
+            layout=Layout(
+                width='100%',
+                # height='260px',
+                # background='#52B5E8',
+                display='flex',
+                justify_content='flex-start',
+                align_items='flex-start',
+                border='3px solid black'
+            )
+        )
+        map_box = Box(
+            [self.mapwidget],
+            layout=Layout(
+                flex='1 1 auto',
+                width='100%',
+                # min_height='600px',
+                # min_width='850px',
+                # background='#52B5E8',
+                display='flex',
+                justify_content='flex-start',
+                align_items='center',
+                border='1px solid black',
+                margin="0px 10px 0px 0px"
+            )
+        )
+
+        slider_box = Box(
+            [self.tslider],
+            layout=Layout(
+                width='100%',
+                height='60px',
+                # background='#52B5E8',
+                display='flex',
+                justify_content='center',
+                align_items='center',
+                border='3px solid white'
+            )
+        )
+
+        histo_box = Box(
+            [self.maphisto],
+            layout=Layout(
+                width='100%',
+                min_height='400px',
+                # background='#52B5E8',
+                display='flex',
+                justify_content='center',
+                align_items='center',
+                border='3px solid white'
+            )
+        )
+        # Create left column (Selector0, MapBox, SliderBox)
+        left_column = VBox(
+            [sel0_box, map_box, slider_box],
+            layout=Layout(
+                flex='1 1 60%',
+                min_width='300px',
+                display='flex',
+                flex_flow='column'
+            )
+        )
+
+        right_column = VBox(
+            [sel2_box, histo_box],
+            layout=Layout(
+                flex='1 1 40%',
+                min_width='300px',
+                display='flex',
+                flex_flow='column'
+            )
+        )
+
+        content_row = HBox(
+            [left_column, right_column],
+            layout=Layout(
+                width='100%',
+                display='flex',
+                flex_flow='row wrap',
+                align_items='flex-start',
+            )
+        )
+
+        main_container = VBox(
+            [ipyw.HTML("<h1>Mappable Obs:</h1>"), content_row],
+            layout= Layout(
+                width='100%',
+                height='100%',
+                display='flex',
+                flex_flow='column'
+            )
+        )
+        return main_container
 
     @property
     def default_unmap_layout(self):
