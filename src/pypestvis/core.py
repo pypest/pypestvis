@@ -537,7 +537,8 @@ class VisHandler(object):
         This is a convenience method to update both widgets at once.
         """
         self.set_map(*args)
-        self.unmapchange()
+        if len(self.unmapable) > 0:
+            self.unmapchange()
 
 
     def get_plotly_mapfig(self):
