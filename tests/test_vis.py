@@ -18,6 +18,7 @@ def test_freyberg():
     obs.loc[obs.oname=='hds', ['k', 'i', 'j']] = obs.loc[obs.oname=='hds'].obgnme.str.rsplit("_",expand=True, n=3)[[1,2,3]].values
     pst.observation_data = obs
     vh = ppv.VisHandler(pst, wd=m_d)
+    vh.tslider.value = 1
     vh.on_map_click(vh.mapwidget.data[0], callbacks.Points(point_inds=[10]), None)
 
     # strip out unmapable
