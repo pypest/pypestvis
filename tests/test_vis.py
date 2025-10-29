@@ -11,12 +11,20 @@ def test_freyberg():
     """
     Test the visualization utilities for freyberg.
     """
+    from plotly import callbacks
     m_d = Path("examples", "freyberg_ies")
     pst = pyemu.Pst(str(m_d / "freyberg.pst"))
     obs = pst.observation_data
     obs.loc[obs.oname=='hds', ['k', 'i', 'j']] = obs.loc[obs.oname=='hds'].obgnme.str.rsplit("_",expand=True, n=3)[[1,2,3]].values
     pst.observation_data = obs
     vh = ppv.VisHandler(pst, wd=m_d)
+    vh.on_map_click(vh.mapwidget.data[0], callbacks.Points(point_inds=[10]), None)
+
+    # strip out unmapable
+    obs = obs.loc[obs.oname!='sfr', :]
+    pst.observation_data = obs
+    vh = ppv.VisHandler(pst, wd=m_d)
+    vh.tslider.value = 1
     pass
 
 
