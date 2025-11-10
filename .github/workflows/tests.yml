@@ -2,7 +2,7 @@ name: Tests
 
 on:
   schedule:
-    - cron: '38 8 * * *' # At 9:42 UTC daily
+    - cron: '38 8 * * 0,3,6' # At 9:42 UTC daily
   push:
     branches:
       - main
