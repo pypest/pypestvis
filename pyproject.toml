@@ -1,7 +1,7 @@
 [project]
 name = "pypestvis"
 version = "0.1.0"
-description = "Add your description here"
+description = "General vis tool for PEST++ run results"
 readme = "README.md"
 authors = [
     { name = "Brioch", email = "briochh@gmail.com" }

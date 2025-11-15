@@ -791,19 +791,19 @@ class VisHandler(object):
             [ipyw.Label("Layer:",
                         layout={'align_self':'flex-start'}),
             self.layselector],
-            layout=Layout(justify_content='flex-start')
+            layout=Layout(justify_content='space-around')
         )
         csel_box = VBox(
             [HBox([self.cmapselector, self.cmapreverse, self.logselector],
                   layout=Layout(width='100%',
                                 display='flex',
-                                justify_content='flex-start',
+                                justify_content='space-around',
                                 align_content='flex-start',
                                 align_items='flex-start')),
              HBox([self.vminmaxslider, self.vminmaxbutton])],
              layout=Layout(width='100%',
                            display='flex',
-                           justify_content='flex-start',
+                           justify_content='space-around',
                            align_content='flex-start',
                            align_items='flex-start',
                            # border='2px solid black'
@@ -812,11 +812,11 @@ class VisHandler(object):
         sel0_box = Box([laysel_box, csel_box],
                        layout=Layout(width='100%',
                                      display='flex',
-                                     justify_content='flex-start',
+                                     justify_content='center',
                                      align_content='flex-start',
                                      align_items='flex-start',
-                                     justify_items='flex-start',
-                                     border='1px solid black'))
+                                     justify_items='center',
+                                     border='1px solid grey'))
         iter_box = Box([ipyw.Label("Iteration:",
                         layout={'align_self':'flex-start'}),
                         self.iterselector],
@@ -831,9 +831,9 @@ class VisHandler(object):
                 # height='260px',
                 # background='#52B5E8',
                 display='flex',
-                justify_content='flex-start',
+                justify_content='space-around',
                 align_items='flex-start',
-                border='3px solid black'
+                border='1px dashed grey'
             )
         )
         map_box = Box(
@@ -845,9 +845,9 @@ class VisHandler(object):
                 # min_width='850px',
                 # background='#52B5E8',
                 display='flex',
-                justify_content='flex-start',
+                justify_content='center',
                 align_items='center',
-                border='1px solid black',
+                # border='1px solid black',
                 margin="0px 10px 0px 0px"
             )
         )
