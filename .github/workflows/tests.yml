@@ -17,8 +17,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        # pick lower and upper versions only
-        python-version: ["3.10", "3.14"]
+        # pick lower and upper versions only, geopandas pip gdal issue for py 3.14 (2025-11-15)
+        python-version: ["3.10", "3.13"]
 
 #    env:
       # Use a non-interactive matplotlib backend
@@ -38,7 +38,7 @@ jobs:
 
       - name: Run tests
         # For example, using `pytest`
-        run: uv run pytest tests -v -n2 --cov --cov-report=xml
+        run: uv run pytest tests -vv -n2 -rA --cov --cov-report=xml
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v4
