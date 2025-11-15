@@ -1882,16 +1882,12 @@ wheels = [
 
 [[package]]
 name = "pyemu"
-version = "1.3.8"
-source = { registry = "https://pypi.org/simple" }
+version = "1.3.8+98.gda5735fa"
+source = { git = "https://github.com/pypest/pyemu?rev=develop#da5735fa008ff0b796eee6dc29a49613d7fd1556" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pandas" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f4/cb/f47bcec2311db3374da988965b6e213a50761e5bb06a3971122f14bb63c5/pyemu-1.3.8.tar.gz", hash = "sha256:673036303dbf479e96b79134c0e0d46e7229339a4592b32de50570bab1e78b1e", size = 356515, upload-time = "2024-12-11T22:59:52.615Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e2/c3/3700773ca24aeba6f15c9ef464cf482c1b59e03f54a201aa64f977c2bcd1/pyemu-1.3.8-py3-none-any.whl", hash = "sha256:6cf7e9af1ae152161ae6625c940a088311a7c0ef336bbe9cbdfe47511c055552", size = 347442, upload-time = "2024-12-11T22:59:50.687Z" },
 ]
 
 [[package]]
@@ -1987,7 +1983,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "plotly", specifier = ">=6.4.0" },
-    { name = "pyemu", specifier = ">=1.3.8" },
+    { name = "pyemu", git = "https://github.com/pypest/pyemu?rev=develop" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.1" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=7.0.0" },
     { name = "pytest-xdist", marker = "extra == 'test'", specifier = ">=3.8.0" },
