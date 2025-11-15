@@ -1,4 +1,6 @@
 # pypestvis
+[![codecov](https://codecov.io/gh/pypest/pypestvis/branch/main/graph/badge.svg?token=AF5VBNEEWB)](https://codecov.io/gh/pypest/pypestvis)
+
 Work in progress library to help quickly setup interactive visulisation of PEST/PEST++ results.
 
 Uses metadata on PEST observation data to georeference observations and plot them, where appropriate.
