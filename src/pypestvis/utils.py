@@ -17,7 +17,7 @@ def _sort_key(x):
         return (0, x)
 
 
-def mg2geojson(mg, wd=None, crs='epsg:2193'):
+def mg2geojson(mg, wd=None, crs=None):
     """
     Convert model grid to GeoJSON format.
 
@@ -31,21 +31,47 @@ def mg2geojson(mg, wd=None, crs='epsg:2193'):
     import pandas as pd
     import json
 
+    if crs is None:
+        crs = mg.crs
+        if crs is None:
+            warnings.warn("No crs passed, geojson will be in unprojected coords and may not map correctly")
+
     if isinstance(mg, (Path, str)):
         mg = get_mg_from_grb(mg)
     ib = mg.idomain.reshape(mg.shape)
-
     # Create a GeoDataFrame from the model grid
     cells = pd.DataFrame(np.argwhere(ib != 0), columns=['k', 'i', 'j'])
     cells['in_verts'] = polygons(np.array(
         mg.get_cell_vertices(cells.i.values, cells.j.values)  # uses baked in flopy method
         ).transpose((2, 0, 1)).tolist())
     cells['cellid'] = mg.get_node(cells[['k','i','j']].values.tolist())
-    cells = gpd.GeoDataFrame(cells, geometry=gpd.GeoSeries(cells['in_verts'], crs=crs).to_crs(lcrs))
+    geoms = gpd.GeoSeries(cells['in_verts'], crs=crs)
+    if crs is not None: # project to lat/lon
+        geoms = geoms.to_crs(lcrs)
+    cells = gpd.GeoDataFrame(cells, geometry=geoms)
     cells = cells.drop(columns=['in_verts']).set_index('cellid')
     if wd is not None:
-        cells.to_file(Path(wd, f'model_grid.json'), driver='GeoJSON')
+        with open(Path(wd, f'model_grid.json'), "w") as f:
+            f.write(cells.to_json())
     return json.loads(cells.to_json())
+
+
+def get_geojson(geojson=None, mg=None, crs=None, wd=None):
+    import json
+    assert any([geojson, mg, wd]), "one of geojson, mg, or wd must be provided"
+    _mg = mg
+    if geojson is None:  # need a geojson for mapping -- it also need to have a property that is unigue
+        if mg is None:
+            _mg, _ = get_mg_mt(wd)
+        # and can be used to identify to map data to the grid (e.g a cellid)
+        geojson = mg2geojson(_mg,
+                             # if wd is passed, save the geojson to wd
+                             wd=wd,
+                             crs=crs)
+    if isinstance(geojson, (str, Path)):
+        with open(geojson, 'r') as fp:
+            geojson = json.load(fp)
+    return geojson
 
 
 def get_mg_mt(d):
@@ -73,7 +99,7 @@ def get_mg_mt(d):
             version='mf6',
             # exe_name='mf6',
             verbosity_level=0,
-            load_only=['dis', 'tdis', 'grb'],
+            load_only=['dis', 'tdis'],
             lazy_io=True
         )
         gwf = sim.get_model()

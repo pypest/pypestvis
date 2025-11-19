@@ -14,7 +14,7 @@ import warnings
 from shapely.geometry import shape
 from ipywidgets import VBox, HBox, Box, Layout
 
-from .utils import _guess_mappable, get_mg_mt, mg2geojson, _sort_key
+from .utils import _guess_mappable, get_mg_mt, _sort_key, get_geojson
 
 
 class VisGroupHandler(object):
@@ -36,6 +36,7 @@ class VisGroupHandler(object):
         """
         self.mapable = _guess_mappable(df)
         if self.mapable == 'grid':
+            # todo: support cellid already being there
             df['cellid'] = mg.get_node(df[['k','i','j']].values.tolist())
         if self.mapable == 'point':
             if 'x' not in df.columns:
@@ -83,7 +84,7 @@ class VisHandler(object):
                  wd=None,  # working directory for the model, needed to get mg from grb, also a save location
                  mg=None,  # needed for referencing kij to json, also can be used to build json if geojson is absent
                  mt=None,  # model time, needed for obs data
-                 crs='epsg:2193',  # coordinate reference system for the modelgrid -- will be converted to WGS84
+                 crs=None,  # coordinate reference system for the modelgrid -- will be converted to WGS84
                  groupby='obgnme',  # groupby for the obs data, default is obgnme
                  tidx='time'):
         """
@@ -96,9 +97,11 @@ class VisHandler(object):
         mg : flopy.ModelGrid, optional
         mt : flopy.ModelTime, optional
         crs : str, optional
-            Optional coordinate reference system for the model grid. Only used if geojson is None when it is passed to
-            constructor method `mg2geojson` to build json from modelgrid object.
-            Default is 'epsg:2193'.
+            Optional coordinate reference system for the model grid.
+            Only used if geojson is None when it is passed to constructor
+            method `mg2geojson` to build json from modelgrid object.
+            Defaults to None -- will not attempt to project from model coord
+            to lat/lon.
         groupby : str, optional
         tidx: str, optional
         """
@@ -120,13 +123,7 @@ class VisHandler(object):
         self.mt = mt
         self.tidx = tidx
 
-        if geojson is None: # need a geojson for mapping -- it also need to have a property that is unigue
-                            # and can be used to identify to map data to the grid (e.g a cellid)
-            geojson = mg2geojson(mg, crs=crs)
-        if isinstance(pst, (str, Path)):
-            with open(geojson, 'r') as fp:
-                geojson = geojson.load(fp)
-        self.geojson = geojson
+        self.geojson = get_geojson(geojson, mg, crs)
 
         # lists for storing tags of mappable status of data groups
         self.gridmapable = []
@@ -143,6 +140,12 @@ class VisHandler(object):
         self._build_obs_handlers()
         self._cell_sel_id = None
         self._uservminmax = False # for storing if user has set vmin/vmax
+
+        self.mapwidget = None
+        self.maphisto = None
+        self.unmaphisto = None
+        self.unmapselector = None
+        self.unmapgroupselector = None
         self._set_widgets()
 
     @contextmanager
@@ -283,13 +286,10 @@ class VisHandler(object):
         self.wobselector.observe(self.set_mapselector, names=['value'])
 
         # non mapable widgets
-        self.unmaphisto = None
-        self.unmapselector = None
-        self.unmapgroupselector = None
         if len(self.unmapable) > 0:
             self.get_unmap_widgets()
-
-        self.mapwidget, self.maphisto = self.get_plotly_mapfig() if self.geojson else (None,None)
+        if len(self.gridmapable) > 0 or len(self.pointmapable) > 0:
+            self.mapwidget, self.maphisto = self.get_plotly_mapfig() if self.geojson else (None,None)
         self._reset_vminmax()
         self.vminmaxslider.observe(self.set_vminmax, names=['value'])
 
@@ -307,6 +307,8 @@ class VisHandler(object):
         """
         if mapfig is None:
             mapfig = self.mapwidget
+        if mapfig is None:
+            return
         self._uservminmax = False
         vmin = mapfig.data[0].z.min()
         vmax = mapfig.data[0].z.max()
@@ -320,22 +322,41 @@ class VisHandler(object):
         obs = self.pst.observation_data
         incols = obs.columns.intersection({'kper', 'kstp', 'k', 'i', 'j'})
         obs = obs.astype({c:"Int32" for c in incols})
-        if self.mt is not None and self.tidx == 'time':
-            # need to get 'time' col
+        if self.tidx == 'time':
+            # default is 'time', so infer from kper/kstp if absent
             if 'time' not in obs.columns:
                 obs['time'] = np.nan
-            # this will need generalising
-            if 'kper' in obs.columns:
-                if 'kstp' not in obs.columns:
-                    obs['time'] = obs.apply(
-                        lambda x: self.mt.get_elapsed_time(x.kper if not pd.isna(x.kper) else 0, None)
-                        if pd.isna(x.time) else x.time, axis=1
-                    ).astype(float)
-                else:
-                    obs['time'] = obs.apply(
-                        lambda x: self.mt.get_elapsed_time(x.kper if not pd.isna(x.kper) else 0, x.kstp) if pd.isna(
-                            x.time) else x.time, axis=1).astype(float)
-
+            # can only do this if we have some reference to build
+            # this could be user built ahead of calling this class
+            if self.mt is not None:
+                # this will need generalising
+                if 'kper' in obs.columns:
+                    if 'kstp' not in obs.columns:
+                        obs['time'] = obs.time.fillna(
+                            obs.apply(
+                                lambda x: self.mt.get_elapsed_time(
+                                    x.kper if not pd.isna(x.kper) else 0,
+                                    None
+                                ), axis=1).astype(float)
+                        )
+                    else:
+                        obs['time'] = obs.time.fillna(
+                            obs.apply(
+                                lambda x: self.mt.get_elapsed_time(
+                                    x.kper if not pd.isna(x.kper) else 0,
+                                    x.kstp if not pd.isna(x.kstp) else None
+                                ), axis=1).astype(float)
+                        )
+        # At the moment, we want whatever is in tidx to be sortable
+        # so all need to be the same dtype
+        if obs[self.tidx].apply(pd.api.types.is_number).any():
+            try:
+                obs[self.tidx] = pd.to_numeric(obs[self.tidx], downcast="integer")
+            except Exception:
+                obs[self.tidx] = obs[self.tidx].astype(str)
+        # fill nans in tidx with 'none' for more
+        # reliable grouping and indexing -- need to split out none when sorting later
+        obs = obs.fillna({self.tidx: 'none'})
         self.pst.observation_data = obs
         ens = self.pst.ies.obsen.T
         if 'iteration' not in ens.columns.names:
@@ -367,7 +388,7 @@ class VisHandler(object):
     def _get_tidx(self):
         t = self.tslider.options[self.tslider.index]
         if len(t) > 1:
-            return t[0]
+            t = t[0]
         return t
 
     def get_unmap_widgets(self):
@@ -379,7 +400,8 @@ class VisHandler(object):
         gph = self.obs_dict[ig]
         t = self._get_tidx()
         opts = gph.ens.index.to_frame()
-        opts = opts.loc[opts[self.tidx] == t].index.unique(level=0)
+        sel = opts[self.tidx] == t
+        opts = opts.loc[sel].index.unique(level=0)
         unmapsel = ipyw.Dropdown(options=opts,
                                  description="Non-mappable obs: ",
                                  value=opts[0],
@@ -474,6 +496,8 @@ class VisHandler(object):
         # will be used in callback so need to handle change arg
         if mapfig is None:
             mapfig = self.mapwidget
+        if mapfig is None:
+            return
         gp = self.mapselector.value
         gph = self.obs_dict[gp]
         i = self.iterselector.value
@@ -959,7 +983,15 @@ class VisHandler(object):
         else:
             df = self.pst.observation_data
         if options is None:
-            options = sorted(df[index_col].fillna('none').unique().tolist())
+            options = df[index_col].fillna('none').unique().tolist()
+        isnone = True
+        try:
+            options.remove('none')
+        except ValueError:
+            isnone = False
+        options = sorted(options)
+        if isnone:
+            options = ['none'] + options
 
         if len(options) < 2:
             self.tslider.disabled = True
