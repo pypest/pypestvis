@@ -16,7 +16,6 @@ from ipywidgets import VBox, HBox, Box, Layout
 
 from .utils import _guess_mappable, get_mg_mt, _sort_key, get_geojson
 
-
 class VisGroupHandler(object):
     """
     Handler Class for groups in the web application.
@@ -106,6 +105,7 @@ class VisHandler(object):
         tidx: str, optional
         """
         self._callback_off = False
+        self._callback_off_count = 0
         if isinstance(pst, (str, Path)):
             pst = pyemu.Pst(str(pst))
         self.pst = pst
@@ -141,36 +141,84 @@ class VisHandler(object):
         self._cell_sel_id = None
         self._uservminmax = False # for storing if user has set vmin/vmax
 
-        self.mapwidget = None
-        self.maphisto = None
-        self.unmaphisto = None
-        self.unmapselector = None
-        self.unmapgroupselector = None
+        self.map_widget = None
+        self.map_histogram = None
+        self.unmap_histogram = None
+        self.unmap_selector = None
+        self.unmap_group_selector = None
+        self._build_widgets()
         self._set_widgets()
 
     @contextmanager
     def callback_off(self):
+        self._callback_off_count += 1
         self._callback_off = True
         try:
             yield
         finally:
-            self._callback_off = False
+            self._callback_off_count -= 1
+            if self._callback_off_count == 0:
+                self._callback_off = False
 
-    def _set_widgets(self):
-        gridw = self.obsval_dict.keys() & self.gridmapable
-        self.wobselector = ipyw.Checkbox(
-            value=False,
-            description="Weighted only",
-            disabled=False if len(gridw) > 0 else True,
-            indent=False
-        )
-
-        self.mapselector = ipyw.RadioButtons(
-            options=self.gridmapable,
+    def _build_widgets(self):
+        # Mapable widgets
+        if len(self.gridmapable) > 0 or len(self.pointmapable) > 0:
+            self.map_widget, self.map_histogram = self._get_plotly_mapfig() if self.geojson else (None, None)
+        # Mappable and observation selection
+        self.map_obs_selector = ipyw.RadioButtons(
+            options=self.gridmapable,  # list of grid based output groups that can map to json features
             # value=self.gridmapable[0],
             description='Gridded datasets:',
-            disabled=False
+            disabled=False if len(self.gridmapable) > 0 else True,
         )
+        self.point_obs_selector = ipyw.RadioButtons(
+            options=self.pointmapable,  # list of point based output groups that can map to scatter maps
+            # value=self.gridmapable[0],
+            description='Scatter datasets:',
+            disabled=False if len(self.gridmapable) > 0 else True,
+        )
+        # Layer selector mappable obs
+        self.layer_selector = ipyw.Dropdown(
+            options=[], # set later based on selected obs group?
+            value=None, # dito
+            # description='Layer:',
+            disabled=False,
+            layout={'width': '100px',
+                    'margin': '0px 20px 0px 0px'}
+        )
+        # Temporal slider for mapping things in time
+        self.map_temporal_slider = ipyw.SelectionSlider(
+            options=[()], # set later based on selected obs group?
+            # value=None, # dito
+            continuous_update=False,
+            orientation='horizontal',
+            readout=True,
+            # readout_format='.0f',
+        )
+
+        # Colormap selector and reverse checkbox
+        self.cmap_selector = ipyw.Dropdown(
+            options=pc.named_colorscales(),
+            value='Plasma'.lower(),
+            description='Colorscale:',
+            layout={"justify_content": "flex-start"},
+            style={'description_width': 'initial'}
+        )
+        self.cmap_reverse = ipyw.Checkbox(
+            value=False,
+            description="Reverse cmap",
+            disabled=False,
+            layout={"align_self": "flex-start",
+                    "justify_content": "flex-start"},
+            indent=False
+        )
+        self.map_log_check = ipyw.Checkbox(value=False,
+                                           description="Logscale",
+                                           disabled=False,
+                                           layout={"align_self": "flex-start",
+                                                   "justify_content": "flex-start"},
+                                           indent=False)
+        # Colormap vmin/vmax slider and reset button
         self.vminmaxslider = ipyw.FloatRangeSlider(
             value=[-1e30, 1e30],
             min=-1e30,
@@ -182,7 +230,7 @@ class VisHandler(object):
             orientation='horizontal',
             readout=True,
             readout_format='.2f',
-            style ={"description_width":'inital'},
+            style={"description_width": 'inital'},
         )
         self.vminmaxbutton = ipyw.Button(
             description='Reset range',
@@ -191,27 +239,57 @@ class VisHandler(object):
             tooltip='Rest vmin/vmax to data range',
             icon="arrows-left-right-to-line"
         )
-        self.vminmaxbutton.on_click(self._reset_vminmax)
-
+        # combined widget
         self.vminvmax = VBox([self.vminmaxslider, self.vminmaxbutton])
 
-        self.layselector = ipyw.Dropdown(
-            options=[],
-            value=None,
-            # description='Layer:',
-            disabled=False,
-            layout={'width': '100px',
-                    'margin': '0px 20px 0px 0px'}
-        )
+        # NON mapable widgets
+        um = self.unmapable
+        ig = None
+        if len(um) > 0:
+            self.unmap_histogram = self._get_plotly_unmapfig()
+            ig = um[0]
+        self.unmap_group_selector = ipyw.Dropdown(options=self.unmapable,
+                                                  description="Non-mappable groups: ",
+                                                  value=ig,
+                                                  style={'description_width': 'initial'})
+        self.unmap_selector = ipyw.Dropdown(options=[],  # set later
+                                            description="Non-mappable obs: ",
+                                            value=None,
+                                            style={'description_width': 'initial'})
 
-        self.rpselector = ipyw.RadioButtons(
+        # Temporal slider for unmapable obs
+        self.unmap_temporal_slider = ipyw.SelectionSlider(
+            options=[()],
+            continuous_update=False,
+            orientation='horizontal',
+            readout=True,
+        )
+        # log checkbox for unmapable obs
+        self.unmap_log_check = ipyw.Checkbox(value=False,
+                                             description="Logscale",
+                                             disabled=False,
+                                             layout={"align_self": "flex-start",
+                                                     "justify_content": "flex-start"},
+                                             indent=False)
+
+        # Generic widgets:
+        # weighted obs check box
+        nnzgps = len(self.obsval_dict.keys())
+        self.weighted_obs_checkbox = ipyw.Checkbox(
+            value=False,
+            description="Weighted only",
+            disabled=False if nnzgps > 0 else True,
+            indent=False
+        )
+        # Radio button for selecting realisations of percentiles
+        self.reals_or_ptile_radio = ipyw.RadioButtons(
             options=[('Select reals.', 'r'), ("Select P.", 'p')],
             value='p',
             description='Plot type:',
             disabled=False,
         )
-
-        self.pslider = ipyw.FloatSlider(
+        # Slider through probability
+        self.prob_slider = ipyw.FloatSlider(
             value=50,
             min=0,
             max=100,
@@ -223,75 +301,136 @@ class VisHandler(object):
             readout=True,
             readout_format='.0f',
         )
-
-        self.tslider = ipyw.SelectionSlider(
-            options=[()],
-            # value=None,
-            continuous_update=False,
-            orientation='horizontal',
-            readout=True,
-            # readout_format='.0f',
-        )
-        self.set_slider_options(index_col=self.tidx)
-
-        self.iterselector = ipyw.Dropdown(
-            options=zip(*[sorted(self.real_dict.keys())]*2),
+        # Iteration and realisation selectors
+        self.iter_selector = ipyw.Dropdown(
+            options=zip(*[sorted(self.real_dict.keys())] * 2),
             # description="Iteration: ",
             value=sorted(self.real_dict.keys())[0],
-            layout = {'width': '100px',
-                      'margin': '0px 20px 0px 0px'}
+            layout={'width': '100px',
+                    'margin': '0px 20px 0px 0px'}
         )
-        self.realselector = ipyw.Dropdown(options=sorted(self.real_dict[self.iterselector.value].tolist(), key=_sort_key),
-                                          description="Realisation: ",
-                                          disabled=True,)
+        self.real_selector = ipyw.Dropdown(
+            options=sorted(self.real_dict[self.iter_selector.value].tolist(), key=_sort_key),
+            description="Realisation: ",
+            disabled=True, )
 
-        self.cmapselector = ipyw.Dropdown(
-            options=pc.named_colorscales(),
-            value='Plasma'.lower(),
-            description='Colorscale:',
-            layout={"justify_content": "flex-start"},
-            style={'description_width': 'initial'}
+
+    def _get_plotly_mapfig(self):
+        json = self.geojson
+        centroids = []
+        for feature in json['features']:
+            geom = shape(feature['geometry'])
+            centroids.append(geom.centroid.coords[0])
+        centroids = np.array(centroids)
+        cc = centroids.mean(axis=0)  # (lon, lat)
+        # print("Approximate middle:", cc)
+
+        zoomlevel = 11.5
+        layout = go.Layout(map_style="carto-positron",
+                           map_zoom=zoomlevel,
+                           map_center={"lat": cc[1], "lon": cc[0]},  # {"lat": cc[1], "lon": cc[0]},
+                           # legend_x=0,
+                           height=600,
+                           # width=720,
+                           margin=dict(t=0, b=0, l=0, r=0),
+                           autosize=True)
+        cpmap = go.Choroplethmap(
+            # geojson=json,  # json with cell edges
+            # locations=[0] * len(json['features']),
+            # z=[0] * len(json['features']),
+            # customdata=[0] * len(json['features']),
+            geojson=None,  # json with cell edges
+            locations=[],
+            z=[],
+            customdata=[],
+            colorscale="plasma",
+            showscale=True,
+            marker_line_width=0.5,
+            marker_line_color='gainsboro',
+            marker_opacity=0.8,
+            hovertemplate='<b>%{location}</b><br>' +
+                          '%{customdata}<br>' +  # Only show custom data
+                          '<extra></extra>',
+            name='cpmap'
         )
-        self.cmapreverse = ipyw.Checkbox(
-            value=False,
-            description="Reverse cmap",
-            disabled=False,
-            layout={"align_self": "flex-start",
-                    "justify_content": "flex-start"},
-            indent = False
+        fig = go.Figure(cpmap, layout=layout)
+        # self.set_map(mapfig=fig)
+        fig = go.FigureWidget(fig)
+        fig.data[0].on_click(self.on_map_click)
+
+        histo = go.Figure(
+            [go.Histogram(histnorm='probability density', name=f"iter_{i}", opacity=0.75) for i in
+             sorted(self.real_dict.keys())],
+            layout=dict(barmode='overlay',
+                        height=400,
+                        width=500,
+                        margin=dict(t=10, b=10, l=10, r=10),
+                        yaxis2=dict(overlaying="y", range=[0,1], visible=False))
         )
+        histo.data[0].update(marker_color='rgba(112,112,112,0.75)')
+        histo.data[-1].update(marker_color='rgba(20,49,220,0.75)')
+        histo.add_trace(go.Histogram(
+            marker_color='rgba(0,0,0,0)',  # Transparent fill
+            marker_line_color='red',  # Outline color
+            marker_line_width=1,
+            opacity=0.75,
+            name=f"obs+noise",
+            histnorm='probability density',
+        ))
+        histo.add_trace(go.Scatter(x=[None] * 50, y=np.linspace(0, 1, 50),
+                                   mode='lines',
+                                   line=dict(color='red', width=2, dash='dash'),
+                                   opacity=0.75,
+                                   name='obsval',
+                                   yaxis='y2',
+                                   showlegend=False,
+                                   hovertemplate="obsval: %{x}<extra></extra>"))
 
-        self.logselector = ipyw.Checkbox(value=False,
-                                         description="Logscale",
-                                         disabled=False,
-                                         layout={"align_self": "flex-start",
-                                                 "justify_content": "flex-start"},
-                                         indent=False
-                                         )
+        histo.add_trace(go.Scatter(x=[None] * 50, y=np.linspace(0,1,50),
+                                   mode='lines',
+                                   line=dict(color='green', width=3, dash='dash'),
+                                   name='mapval',
+                                   yaxis='y2',
+                                   showlegend=False,
+                                   hovertemplate="mapval: %{x}<extra></extra>"))
+        histo = go.FigureWidget(histo)
+        return fig, histo
 
-        self.rpselector.observe(self.rpchange, names=['value'])
+    def _set_widgets(self):
+        """ Setting up widget initial states and callbacks
+        """
 
-        self.mapselector.observe(self.set_bounds_and_map, names=['value'])
+        self.vminmaxbutton.on_click(self._reset_vminmax)
 
-        self.pslider.observe(self.set_map, names=['value'])
-        self.layselector.observe(self.set_map, names=['value'])
-        self.iterselector.observe(self.set_map, names=['value'])
-        self.realselector.observe(self.set_map, names=['value'])
-        self.cmapselector.observe(self.set_map, names=['value'])
-        self.cmapreverse.observe(self.set_map, names=['value'])
+        self.reals_or_ptile_radio.observe(self.rpchange, names=['value'])
 
-        self.logselector.observe(self.set_both, names=['value'])
-        self.tslider.observe(self.set_both, names=['value'])
+        self.map_obs_selector.observe(self.set_bounds_and_map, names=['value'])
 
-        self.wobselector.observe(self.set_mapselector, names=['value'])
+        self.prob_slider.observe(self.set_map, names=['value'])
+        self.layer_selector.observe(self.set_map, names=['value'])
+        self.iter_selector.observe(self.set_map, names=['value'])
+        self.real_selector.observe(self.set_map, names=['value'])
+        self.cmap_selector.observe(self.set_map, names=['value'])
+        self.cmap_reverse.observe(self.set_map, names=['value'])
+        self.map_temporal_slider.observe(self.set_map, names=['value'])
 
-        # non mapable widgets
-        if len(self.unmapable) > 0:
-            self.get_unmap_widgets()
-        if len(self.gridmapable) > 0 or len(self.pointmapable) > 0:
-            self.mapwidget, self.maphisto = self.get_plotly_mapfig() if self.geojson else (None,None)
+        self.map_log_check.observe(self.set_both, names=['value'])
+
+        self.weighted_obs_checkbox.observe(self.set_mapselector, names=['value'])
+
+
         self._reset_vminmax()
         self.vminmaxslider.observe(self.set_vminmax, names=['value'])
+
+        self.unmap_log_check.observe(self.set_unmap, names=['value'])
+        self.unmap_temporal_slider.observe(self.set_unmap_options, names=['value'])
+        self.unmap_group_selector.observe(self.set_unmap_options, names=['value'])
+        self.unmap_selector.observe(self.set_unmap, names=['value'])
+        self.set_map()
+        if len(self.unmapable) > 0:
+            # should trigger set_unmap
+            self.set_unmap_options()
+
 
     def set_vminmax(self, change=None):
         """
@@ -306,12 +445,15 @@ class VisHandler(object):
         Set the vmin and vmax values for the color scale based on the current map data values
         """
         if mapfig is None:
-            mapfig = self.mapwidget
+            mapfig = self.map_widget
         if mapfig is None:
             return
+        z = mapfig.data[0].z
+        if len(z) == 0:
+            return
         self._uservminmax = False
-        vmin = mapfig.data[0].z.min()
-        vmax = mapfig.data[0].z.max()
+        vmin = z.min()
+        vmax = z.max()
         with self.vminmaxslider.hold_trait_notifications():
             self.vminmaxslider.min = vmin
             self.vminmaxslider.max = vmax
@@ -328,7 +470,7 @@ class VisHandler(object):
                 obs['time'] = np.nan
             # can only do this if we have some reference to build
             # this could be user built ahead of calling this class
-            if self.mt is not None:
+            if self.mt is not None and obs.time.isna().any():
                 # this will need generalising
                 if 'kper' in obs.columns:
                     if 'kstp' not in obs.columns:
@@ -375,7 +517,7 @@ class VisHandler(object):
                 self.pointmapable.append(gp)
             else:
                 self.unmapable.append(gp)
-            if any(obdf.weight != 0):
+            if (obdf.weight != 0).any():
                 wobs = obdf.loc[obdf.weight != 0]
                 # todo: catch and forgive absent noise ensembles
                 if noise is not None and len(wobs.index.intersection(noise.index)) > 0:
@@ -385,53 +527,37 @@ class VisHandler(object):
             self.obs_dict[gp] = gph
         pass
 
-    def _get_tidx(self):
-        t = self.tslider.options[self.tslider.index]
-        if len(t) > 1:
+    def _get_tidx(self, slider):
+        t = slider.options[slider.index]
+        if not isinstance(t, str) and len(t) > 1:
             t = t[0]
         return t
 
-    def get_unmap_widgets(self):
-        ig = self.unmapable[0]
-        unmapgsel = ipyw.Dropdown(options=self.unmapable,
-                                  description="Non-mappable groups: ",
-                                  value=ig,
-                                  style={'description_width': 'initial'})
-        gph = self.obs_dict[ig]
-        t = self._get_tidx()
-        opts = gph.ens.index.to_frame()
-        sel = opts[self.tidx] == t
-        opts = opts.loc[sel].index.unique(level=0)
-        unmapsel = ipyw.Dropdown(options=opts,
-                                 description="Non-mappable obs: ",
-                                 value=opts[0],
-                                 style={'description_width': 'initial'})
-        seldf = gph.ens.loc[(opts[0], [t]), :]
-        if len(seldf) > 1:
-            warnings.warn("output and tidx match more than one output",
-                          UserWarning)
-        seldf = seldf.iloc[0]
-
-        unmaphisto = go.Figure([go.Histogram(x=seldf.loc[(i, slice(None))].values,
-                                                   histnorm='probability density',
-                                                   name=f"iter_{i}",
-                                                   opacity=0.75) for i in
-                                      sorted(self.real_dict.keys())],
-                                     layout=dict(barmode='overlay',
-                                                 height=400,
-                                                 width=600,
-                                                 margin=dict(t=10, b=10, l=10, r=10),
-                                                 yaxis2=dict(overlaying="y", range=[0,1], visible=False)))
+    def _get_plotly_unmapfig(self):
+        unmaphisto = go.Figure(
+            [go.Histogram(x=[],
+                          histnorm='probability density',
+                          name=f"iter_{i}",
+                          opacity=0.75)
+             for i in sorted(self.real_dict.keys())],
+            layout=dict(barmode='overlay',
+                        height=400, width=600,
+                        margin=dict(t=10, b=10, l=10, r=10),
+                        yaxis2=dict(overlaying="y", range=[0,1], visible=False))
+        )
+        # maker first and last histo grey and blue
         unmaphisto.data[0].update(marker_color='rgba(112,112,112,0.75)')
         unmaphisto.data[-1].update(marker_color='rgba(20,49,220,0.75)')
+        # add noise histo
         unmaphisto.add_trace(go.Histogram(
             marker_color='rgba(0,0,0,0)',  # Transparent fill
             marker_line_color='red',  # Outline color
-            marker_line_width=1,
+            marker_line_width=0.7,
             opacity=0.75,
             name=f"obs+noise",
             histnorm='probability density',
         ))
+        # add vline for obsval
         unmaphisto.add_trace(go.Scatter(
             x=[None]*50, y=np.linspace(0,1,50),
             line=dict(color='red', width=2, dash='dash'),
@@ -442,48 +568,44 @@ class VisHandler(object):
             hovertemplate="obsval: %{x}<extra></extra>",
             visible=False
         ))
-
+        # make into widget
         unmaphisto = go.FigureWidget(unmaphisto)
+        return unmaphisto
 
-
-        unmapgsel.observe(self.unmapgchange, names=['value'])
-        unmapsel.observe(self.unmapchange, names=['value'])
-
-        self.unmaphisto = unmaphisto
-        self.unmapgroupselector = unmapgsel
-        self.unmapselector = unmapsel
 
     def set_mapselector(self, change=None):
         with self.callback_off():
-            cv = self.mapselector.value
-            if self.wobselector.value:
+            cv = self.map_obs_selector.value
+            if self.weighted_obs_checkbox.value:
                 gridw = self.obsval_dict.keys() & self.gridmapable
                 if len(gridw) > 0:
-                    self.mapselector.options = sorted(gridw)
+                    self.map_obs_selector.options = sorted(gridw)
                 else:
-                    self.wobselector.value = False
-                    self.wobselector.disabled = True
+                    self.weighted_obs_checkbox.value = False
+                    self.weighted_obs_checkbox.disabled = True
             else:
-                self.mapselector.options = self.gridmapable
-            if cv in self.mapselector.options:
-                self.mapselector.value = cv
+                self.map_obs_selector.options = self.gridmapable
+            if cv in self.map_obs_selector.options:
+                self.map_obs_selector.value = cv
             else:
-                self.mapselector.value = self.mapselector.options[0]
+                self.map_obs_selector.value = self.map_obs_selector.options[0]
         self.set_map(change)
 
-    def set_layselector(self, gp):
+    def set_layselector(self):
         # get current layer selector value
-        k = self.layselector.value
+        k = self.layer_selector.value
         # get group handler for selected group
+        gp = self.map_obs_selector.value
         gph = self.obs_dict[gp]
         kopt = sorted(gph.metadf.k.unique().tolist())
-        if k is None or k not in kopt:
-            self.layselector.options = kopt
-            self.layselector.value = kopt[0]
-        else:
-            self.layselector.options = kopt
-            self.layselector.value = k
-        return self.layselector.value
+        with self.callback_off():
+            if k is None or k not in kopt:
+                self.layer_selector.options = kopt
+                self.layer_selector.value = kopt[0]
+            else:
+                self.layer_selector.options = kopt
+                self.layer_selector.value = k
+        return self.layer_selector.value
 
     def set_bounds_and_map(self, change=None):
         self._uservminmax = False
@@ -494,53 +616,66 @@ class VisHandler(object):
             # if we are in a callback, don't do anything
             return
         # will be used in callback so need to handle change arg
+        print("Setting map...")
         if mapfig is None:
-            mapfig = self.mapwidget
+            mapfig = self.map_widget
         if mapfig is None:
             return
-        gp = self.mapselector.value
+        # get current group from selector
+        gp = self.map_obs_selector.value
+        # get group handler for selected group from outputs dict (these contain ensembles etc)
         gph = self.obs_dict[gp]
-        i = self.iterselector.value
+        # get current selected iteration
+        i = self.iter_selector.value
         with self.callback_off():
-            self.set_layselector(gp)
-        k = self.layselector.value
-        t = self._get_tidx()
-        self.realselector.options = sorted(self.real_dict[i].tolist(), key=_sort_key)
-        r = self.realselector.value
-        p = self.pslider.value
-        log = self.logselector.value
-        cmap = self.cmapselector.value
-        cr = self.cmapreverse.value
-        if self.rpselector.value == 'r':
-            seldf = gph.ens.loc[(slice(None), k, t), (i, r)]
+            self.set_layselector()
+            self.set_slider_options(gph.idxmap, self.map_temporal_slider)
+            self.real_selector.options = sorted(self.real_dict[i].tolist(), key=_sort_key)
+        k = self.layer_selector.value
+        t = self._get_tidx(self.map_temporal_slider)
+        r = self.real_selector.value
+        p = self.prob_slider.value
+        log = self.map_log_check.value
+        cmap = self.cmap_selector.value
+        cr = self.cmap_reverse.value
+        if self.weighted_obs_checkbox.value:
+            obscells = gph.idxmap.loc[self.obsval_dict[gp].index].cellid.values
         else:
-            seldf = gph.qtiles.loc[(slice(None), k, t), (i, f"P{int(p)}")]
+            obscells = slice(None)
+        if t in gph.ens.index.unique(self.tidx):
+            if self.reals_or_ptile_radio.value == 'r':
+                seldf = gph.ens.loc[(obscells, k, t), (i, r)]
+            else:
+                seldf = gph.qtiles.loc[(obscells, k, t), (i, f"P{int(p)}")]
+            z = seldf.values
+            locs = seldf.index.get_level_values('cellid')
+        else:
+            z = []
+            locs = []
         if cr:
             cmap += '_r'
-        if self.wobselector.value:
-            obscells = gph.idxmap.loc[self.obsval_dict[gp].index].cellid.values
-            seldf = seldf.loc[(obscells, k, slice(None))]
-        z = seldf.values
         # print(seldf)
         if log:
             z = np.log10(z)
 
-        if self._uservminmax:
+        if self._uservminmax and len(z) > 0:
             zmin, zmax = self.vminmaxslider.value
             zmin = np.max([zmin, z.min()])
             zmax = np.min([zmax, z.max()])
         else:
             zmin, zmax = [None, None]
         print("vminvmax: ", zmin, zmax)
+
         with mapfig.batch_update():
             mapfig.update_traces(
+                geojson=self.geojson,
                 z=z,
                 zmin=zmin,
                 zmax=zmax,
                 zauto=True if zmin is None or zmax is None else False,
-                locations=seldf.index.get_level_values('cellid'),
+                locations=locs,
                 colorscale=cmap,
-                customdata=seldf.values,
+                customdata=z,
                 selector=dict(name='cpmap')
             )
         if not self._uservminmax:
@@ -548,7 +683,7 @@ class VisHandler(object):
                 self._reset_vminmax(mapfig=mapfig)
         self.highlight_cell(mapfig)
         if change is not None:
-            if change['owner'] == self.realselector or change['owner'] == self.pslider:
+            if change['owner'] == self.real_selector or change['owner'] == self.prob_slider:
                 print("Only updating guide line")
                 self.update_maphisto_line()
             else:
@@ -562,83 +697,7 @@ class VisHandler(object):
         """
         self.set_map(*args)
         if len(self.unmapable) > 0:
-            self.unmapchange()
-
-
-    def get_plotly_mapfig(self):
-        json = self.geojson
-        centroids = []
-        for feature in json['features']:
-            geom = shape(feature['geometry'])
-            centroids.append(geom.centroid.coords[0])
-        centroids = np.array(centroids)
-        cc = centroids.mean(axis=0)  # (lon, lat)
-        # print("Approximate middle:", cc)
-
-        zoomlevel = 11.5
-        layout = go.Layout(map_style="carto-positron",
-                           map_zoom=zoomlevel,
-                           map_center={"lat": cc[1], "lon": cc[0]},  # {"lat": cc[1], "lon": cc[0]},
-                           # legend_x=0,
-                           height=600,
-                           # width=720,
-                           margin=dict(t=0, b=0, l=0, r=0),
-                           autosize=True)
-        cpmap = go.Choroplethmap(geojson=json,  # json with cell edges
-                                locations=[0] * len(json['features']),
-                                z=[0] * len(json['features']),
-                                colorscale="plasma",
-                                showscale=True,
-                                marker_line_width=0.5,
-                                marker_line_color='gainsboro',
-                                marker_opacity=0.8,
-                                customdata=[0] * len(json['features']),
-                                hovertemplate='<b>%{location}</b><br>' +
-                                              '%{customdata}<br>' +  # Only show custom data
-                                              '<extra></extra>',
-                                name='cpmap')
-        fig = go.Figure(cpmap, layout=layout)
-        self.set_map(mapfig=fig)
-        fig = go.FigureWidget(fig)
-        fig.data[0].on_click(self.on_map_click)
-
-        histo = go.Figure(
-            [go.Histogram(histnorm='probability density', name=f"iter_{i}", opacity=0.75) for i in
-             sorted(self.real_dict.keys())],
-            layout=dict(barmode='overlay',
-                        height=400,
-                        width=500,
-                        margin=dict(t=10, b=10, l=10, r=10),
-                        yaxis2=dict(overlaying="y", range=[0,1], visible=False))
-        )
-        histo.data[0].update(marker_color='rgba(112,112,112,0.75)')
-        histo.data[-1].update(marker_color='rgba(20,49,220,0.75)')
-        histo.add_trace(go.Histogram(
-            marker_color='rgba(0,0,0,0)',  # Transparent fill
-            marker_line_color='red',  # Outline color
-            marker_line_width=1,
-            opacity=0.75,
-            name=f"obs+noise",
-            histnorm='probability density',
-        ))
-        histo.add_trace(go.Scatter(x=[None] * 50, y=np.linspace(0, 1, 50),
-                                   mode='lines',
-                                   line=dict(color='red', width=2, dash='dash'),
-                                   opacity=0.75,
-                                   name='obsval',
-                                   yaxis='y2',
-                                   showlegend=False,
-                                   hovertemplate="obsval: %{x}<extra></extra>"))
-
-        histo.add_trace(go.Scatter(x=[None] * 50, y=np.linspace(0,1,50),
-                                   mode='lines',
-                                   line=dict(color='green', width=3, dash='dash'),
-                                   name='mapval',
-                                   yaxis='y2',
-                                   showlegend=False,
-                                   hovertemplate="mapval: %{x}<extra></extra>"))
-        histo = go.FigureWidget(histo)
-        return fig, histo
+            self.set_unmap()
 
     def on_map_click(self, *clickdata):
         trace, p, s = clickdata
@@ -649,7 +708,7 @@ class VisHandler(object):
         cellid = trace.locations[idx]
         self._cell_sel_id = cellid
         self.highlight_cell()
-        with self.maphisto.batch_update():
+        with self.map_histogram.batch_update():
             self.update_maphisto()
 
 
@@ -663,7 +722,7 @@ class VisHandler(object):
             The ID of the cell to highlight.
         """
         if mapfig is None:
-            mapfig = self.mapwidget
+            mapfig = self.map_widget
         cellid = self._cell_sel_id
         print("selected cellid :", cellid)
         with mapfig.batch_update():
@@ -688,9 +747,12 @@ class VisHandler(object):
             trace.marker.line.width = line_widths
             trace.marker.line.color = line_colors
 
-    def _histomod(self, histowgt, df, gp):
+    def _histomod(self, histowgt, df, gp, log=False):
+        if df is None:
+            histowgt.update_traces(x=[])
+            return
         gph = self.obs_dict[gp]
-        if self.logselector.value:
+        if log:
             df = np.log10(df)
         for i, dfi in df.groupby('iteration'):
             # print(df)
@@ -699,9 +761,8 @@ class VisHandler(object):
             obsplus = self.obsval_dict[gp]
             obsidx = obsplus.index.intersection(gph.idxmap_r.loc[df.name])
             if len(obsidx) > 0:
-                obsplus = obsplus.loc[
-                    obsidx].values.flatten()  # todo this will need to change if more than one obs per cell
-                if self.logselector.value:
+                obsplus = obsplus.loc[obsidx].values.flatten()  # todo this will need to change if more than one obs per cell
+                if log:
                     obsplus = np.log10(obsplus)
                 if len(np.unique(obsplus)) > 1:
                     # only update if there is more than one unique value
@@ -712,7 +773,7 @@ class VisHandler(object):
 
                 else:
                     # no obs+noise for this group
-                    print("unique obs+noise value for ", df.name, ":", obsplus)
+                    print("unique obs+noise value for ", df.name, ":", obsplus[0])
                     histowgt.update_traces(x=[], selector=dict(name=f"obs+noise"))
                     histowgt.update_traces(x=[obsplus[0]]*50, visible=True,
                                            selector=dict(name=f"obsval"))
@@ -727,16 +788,15 @@ class VisHandler(object):
             histowgt.update_traces(x=[None]*50, visible=False,
                                    selector=dict(name=f"obsval"))
 
-
     def update_maphisto(self):
         cellid = self._cell_sel_id
-        gp = self.mapselector.value
+        gp = self.map_obs_selector.value
         gph = self.obs_dict[gp]
         if cellid is None or cellid not in gph.ens.index.get_level_values(0):
-            self.maphisto.update_traces(x=[])
+            self.map_histogram.update_traces(x=[])
         else:
-            t = self._get_tidx()
-            k = self.layselector.value
+            t = self._get_tidx(self.map_temporal_slider)
+            k = self.layer_selector.value
             # extract the data for the selected cell and tidx
             # -- this has to be a Series
             dff = gph.ens.loc[(cellid, k, [t]), :]
@@ -744,69 +804,94 @@ class VisHandler(object):
                 warnings.warn("Cellid and tidx match more than one output",
                               UserWarning)
             dff = dff.iloc[0]
-            self._histomod(self.maphisto, dff, gp)
+            self._histomod(self.map_histogram, dff, gp,
+                           log=self.map_log_check.value)
         self.update_maphisto_line()
 
     def update_maphisto_line(self):
         cellid = self._cell_sel_id
-        rp = self.rpselector.value
-        t = self._get_tidx()
-        k = self.layselector.value
-        i = self.iterselector.value
+        rp = self.reals_or_ptile_radio.value
+        t = self._get_tidx(self.map_temporal_slider)
+        k = self.layer_selector.value
+        i = self.iter_selector.value
         if rp == 'r':
-            v = self.realselector.value
-            data = self.obs_dict[self.mapselector.value].ens
+            v = self.real_selector.value
+            data = self.obs_dict[self.map_obs_selector.value].ens
             csel = (i, v)
         else:
-            v = self.pslider.value
-            data = self.obs_dict[self.mapselector.value].qtiles
+            v = self.prob_slider.value
+            data = self.obs_dict[self.map_obs_selector.value].qtiles
             csel = (i, f"P{int(v)}")
         if cellid is None or cellid not in data.index.get_level_values(0):
             dff = None
         else:
             dff = data.loc[(cellid, k, [t]), csel].values[0]
-        if self.logselector.value and dff is not None:
+        if self.map_log_check.value and dff is not None:
             dff = np.log10(dff)
         print("Prob/Real value: ",dff)
         # Update the vertical line in the histogram
-        with self.maphisto.batch_update():
+        with self.map_histogram.batch_update():
             # Remove any existing vertical line
-            self.maphisto.update_traces(x=[dff]*50, selector=dict(name=f"mapval"))
+            self.map_histogram.update_traces(x=[dff] * 50, selector=dict(name=f"mapval"))
 
 
     def rpchange(self, change):
         if change.new == 'r':
-            self.realselector.disabled = False
-            self.pslider.disabled = True
+            self.real_selector.disabled = False
+            self.prob_slider.disabled = True
         else:
-            self.realselector.disabled = True
-            self.pslider.disabled = False
+            self.real_selector.disabled = True
+            self.prob_slider.disabled = False
         self.set_map(change)
 
-    def unmapgchange(self, change):
-        gsel = self.unmapgroupselector.value
-        osel = self.unmapselector.value
-        opts = self.obs_dict[gsel].ens.index.to_frame()
-        t = self._get_tidx()
-        # todo time may or may not be part of this...?
-        self.unmapselector.options=opts.loc[opts[self.tidx]==t].index.unique(level=0)
-        # if unmapselector.value is changed by the above unmapchange will already have been triggered
-        # catch the instance where the value is not changed
-        if osel == self.unmapselector.value:
-            self.unmapchange()
 
-    def unmapchange(self, change=None):
-        gsel = self.unmapgroupselector.value
-        v = self.unmapselector.value
-        t = self._get_tidx()  # todo time may or may not be part of this...?
+    def set_unmap_options(self, change=None):
+        if self._callback_off:
+            # if we are in a callback, don't do anything
+            return
+        # if group selector changes, need to update obs selector options
+        # dependent on the selected time (this can get circular!)
+        print("Setting unmap options...")
+        gsel = self.unmap_group_selector.value
+        osel = self.unmap_selector.value
         gph = self.obs_dict[gsel]
-        seldf = gph.ens.loc[(v, [t]), :]
-        if len(seldf) > 1:
-            warnings.warn("output and tidx match more than one output",
-                          UserWarning)
-        seldf = seldf.iloc[0]
-        with self.unmaphisto.batch_update():
-            self._histomod(self.unmaphisto, seldf, gsel)
+        # if unmap group has changed need to revaluate temporal slider options
+        with self.callback_off():
+            self.set_slider_options(gph.idxmap, self.unmap_temporal_slider)
+        opts = self.obs_dict[gsel].ens.index.to_frame()
+        t = self._get_tidx(self.unmap_temporal_slider)
+        # todo time may or may not be part of this...?
+        self.unmap_selector.options=opts.loc[opts[self.tidx] == t].index.unique(level=0)
+        if osel in self.unmap_selector.options:
+            self.unmap_selector.value = osel
+        else:
+            self.unmap_selector.value = self.unmap_selector.options[0]
+        # if unmapselector.value is changed by the above set_unmap will already have been triggered
+        # catch the instance where the value is not changed
+        if osel == self.unmap_selector.value:
+            self.set_unmap()
+
+    def set_unmap(self, change=None):
+        if self._callback_off:
+            # if we are in a callback, don't do anything
+            return
+        # if unmap observation changed need to update histogram
+        print("Setting unmap...")
+        gsel = self.unmap_group_selector.value
+        gph = self.obs_dict[gsel]
+        t = self._get_tidx(self.unmap_temporal_slider)  # todo time may or may not be part of this...?
+        v = self.unmap_selector.value
+        try:
+            seldf = gph.ens.loc[(v, [t]), :]
+            if len(seldf) > 1:
+                warnings.warn("output and tidx match more than one output",
+                              UserWarning)
+            seldf = seldf.iloc[0]
+        except KeyError:
+            seldf = pd.DataFrame()
+        with self.unmap_histogram.batch_update():
+            self._histomod(self.unmap_histogram, seldf, gsel,
+                           log=self.unmap_log_check.value)
 
     @property
     def default_map_layout(self):
@@ -814,11 +899,11 @@ class VisHandler(object):
         laysel_box = VBox(
             [ipyw.Label("Layer:",
                         layout={'align_self':'flex-start'}),
-            self.layselector],
+             self.layer_selector],
             layout=Layout(justify_content='space-around')
         )
         csel_box = VBox(
-            [HBox([self.cmapselector, self.cmapreverse, self.logselector],
+            [HBox([self.cmap_selector, self.cmap_reverse, self.map_log_check],
                   layout=Layout(width='100%',
                                 display='flex',
                                 justify_content='space-around',
@@ -843,14 +928,14 @@ class VisHandler(object):
                                      border='1px solid grey'))
         iter_box = Box([ipyw.Label("Iteration:",
                         layout={'align_self':'flex-start'}),
-                        self.iterselector],
+                        self.iter_selector],
                        layout=Layout(justify_content='flex-start'))
-        sel2_box = Box([VBox([self.wobselector,
-                   self.mapselector]),
-             VBox([iter_box,
-                   self.rpselector,
-                   HBox([self.pslider, self.realselector])])],
-            layout=Layout(
+        sel2_box = Box([VBox([self.weighted_obs_checkbox,
+                              self.map_obs_selector]),
+                        VBox([iter_box,
+                              self.reals_or_ptile_radio,
+                              HBox([self.prob_slider, self.real_selector])])],
+                       layout=Layout(
                 width='100%',
                 # height='260px',
                 # background='#52B5E8',
@@ -859,9 +944,9 @@ class VisHandler(object):
                 align_items='flex-start',
                 border='1px dashed grey'
             )
-        )
+                       )
         map_box = Box(
-            [self.mapwidget],
+            [self.map_widget],
             layout=Layout(
                 flex='1 1 auto',
                 width='100%',
@@ -877,7 +962,7 @@ class VisHandler(object):
         )
 
         slider_box = Box(
-            [self.tslider],
+            [self.map_temporal_slider],
             layout=Layout(
                 width='100%',
                 height='60px',
@@ -890,7 +975,7 @@ class VisHandler(object):
         )
 
         histo_box = Box(
-            [self.maphisto],
+            [self.map_histogram],
             layout=Layout(
                 width='100%',
                 min_height='400px',
@@ -945,45 +1030,34 @@ class VisHandler(object):
 
     @property
     def default_unmap_layout(self):
-        if self.unmaphisto is None:
+        if self.unmap_histogram is None:
             return None
         unmapbox = ipyw.VBox([
             ipyw.HTML("<h1>Unmappable Obs:</h1>"),
-            ipyw.Box([self.unmapgroupselector, self.unmapselector]),
-            self.unmaphisto
+            ipyw.Box([self.unmap_group_selector, self.unmap_selector]),
+            ipyw.Box([self.unmap_histogram, ipyw.VBox([self.unmap_temporal_slider,
+                                                       self.unmap_log_check])])
         ])
         return unmapbox
 
-    def set_slider_options(self, index_col='time',
-                           options=None, parobs='obs',
-                           description="Select:"):
+    def set_slider_options(self, idxs, slider=None, description="Time:"):
         """
-        Set the options for the time-equiv slider.
-
+        Set slider options based on unique values in observation or parameter data
         Parameters
         ----------
-        index_col : str, optional
-            The column in the observation dataframe to use for the slider options.
-            Default is 'time'.
-        options : list, optional
-            List of options to set for the slider. If None, unique values in index_col for paramter
-            or observation data (according to the value of parobs).
-        parobs : str, optional
-            The type of data to use for the slider options, either 'obs' or 'par'.
-            Default is 'obs'.
+        slider : ipyw.SelectionSlider, optional
+            Slider widget to set options for. If None, uses self.map_temporal_slider
         description : str, optional
-            The description for the slider widget.
-            Default is "Select:".
+            Description for the slider widget. Default is "Time:"
+
+        Returns
+        -------
 
         """
-        if parobs not in ['obs', 'par']:
-            raise ValueError("parobs must be either 'obs' or 'par'")
-        elif parobs == 'par':
-            df = self.pst.parameter_data
-        else:
-            df = self.pst.observation_data
-        if options is None:
-            options = df[index_col].fillna('none').unique().tolist()
+        if slider is None:
+            slider = self.map_temporal_slider
+        t = self._get_tidx(slider)
+        options = idxs[self.tidx].fillna('none').unique().tolist()
         isnone = True
         try:
             options.remove('none')
@@ -994,8 +1068,10 @@ class VisHandler(object):
             options = ['none'] + options
 
         if len(options) < 2:
-            self.tslider.disabled = True
-        self.tslider.options = [(t,i) for i, t in enumerate(options)]
-        self.tslider.value = 0
-        self.tslider.description = description
+            slider.disabled = True
+        i = options.index(t) if t in options else 0
+        options = [(t, i) for i, t in enumerate(options)]
+        slider.options = options
+        slider.value = i
+        slider.description = description
         pass
