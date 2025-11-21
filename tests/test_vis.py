@@ -189,6 +189,30 @@ def test_lh(tmp_path, option):
     vh.set_map()
 
 
+def profile_vis(wd=None, temp=Path('profiling'), crs=None):
+    import cProfile
+    import pstats
+    if wd is None:
+        wd = 'freyberg_ies'
+        m_d = Path(temp, wd)
+        shutil.rmtree(m_d, ignore_errors=True)
+        pst = spinup_freyberg(temp)
+    else:
+        wd = Path(wd)
+        m_d = Path(temp, wd.name)
+        shutil.copytree(wd, m_d, dirs_exist_ok=True)
+        pstfname = list(m_d.glob('*.pst'))[0]
+        pst = pyemu.Pst(str(pstfname))
+    pr = cProfile.Profile()
+    pr.enable()
+    vh = ppv.VisHandler(pst, wd=m_d, crs=crs)
+    pr.disable()
+    ps = pstats.Stats(pr).sort_stats('cumtime')
+    ps.print_stats(40)
+
 if __name__ == '__main__':
     # test_vis('test')
+    alt = dict(wd=Path("..", "..", "ranger_ua", "master_precond"),
+               crs="EPSG:28353")
+    profile_vis(**alt)
     pass

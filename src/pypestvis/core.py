@@ -123,7 +123,10 @@ class VisHandler(object):
         self.mt = mt
         self.tidx = tidx
 
-        self.geojson = get_geojson(geojson, mg, crs)
+        self.geojson = get_geojson(geojson=geojson,
+                                   mg=mg,
+                                   crs=crs,
+                                   wd=wd)
 
         # lists for storing tags of mappable status of data groups
         self.gridmapable = []
