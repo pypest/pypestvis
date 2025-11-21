@@ -3,6 +3,7 @@ import pytest
 import pyemu
 import pandas as pd
 from pathlib import Path
+import numpy as np
 
 import pypestvis as ppv
 
@@ -17,6 +18,17 @@ def spinup_freyberg(tmp):
     pst.observation_data = obs
     return pst
 
+
+def _check_selval(vh, sel=10):
+    z = vh.map_widget.data[0].z[sel]
+    mapfignames = [x.name for x in vh.map_histogram.data]
+    selline = vh.map_histogram.data[mapfignames.index('mapval')]
+    assert np.unique(selline.x).shape[0] == 1
+    selval = selline.x[0]
+    assert np.isclose(z, selval), f"histo value ({selval}) does not match map value ({z})"
+    return selval
+
+
 # test currently relying on presence of constructed interface pst_template
 def test_freyberg(tmp_path):
     """
@@ -24,15 +36,6 @@ def test_freyberg(tmp_path):
     """
     from plotly import callbacks
     import numpy as np
-    def _check_selval():
-        z = vh.map_widget.data[0].z[sel]
-        mapfignames = [x.name for x in vh.map_histogram.data]
-        selline = vh.map_histogram.data[mapfignames.index('mapval')]
-        assert np.unique(selline.x).shape[0] == 1
-        selval = selline.x[0]
-        assert np.isclose(z, selval), f"histo value ({selval}) does not match map value ({z})"
-        return selval
-
     sel = 10
     m_d = tmp_path / "freyberg_ies"
     pst = spinup_freyberg(tmp_path)
@@ -42,21 +45,21 @@ def test_freyberg(tmp_path):
     z2 = vh.map_widget.data[0].z[sel]
     assert z != z2 # should be different at time 1
     vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[sel]), None)
-    selval = _check_selval()
+    selval = _check_selval(vh, sel)
     assert np.isclose(selval, z2) # should be same after click
 
     vh.prob_slider.value = 90
-    selval2 = _check_selval()
+    selval2 = _check_selval(vh, sel)
     assert selval2 > selval # should be larger at P90
 
     vh.reals_or_ptile_radio.value = 'r'
-    selval3 = _check_selval()
+    selval3 = _check_selval(vh, sel)
     assert selval3 != selval2 # should have changed
     vh.real_selector.value = '0'
-    selval4 = _check_selval()
+    selval4 = _check_selval(vh, sel)
     assert selval4 != selval3 # should have changed
     vh.reals_or_ptile_radio.value = 'p'
-    selval5 = _check_selval()
+    selval5 = _check_selval(vh, sel)
     assert selval5 != selval4 # should have changed
     assert selval5 == selval2  # should have changed
 
@@ -115,15 +118,30 @@ def test_t_str(tmp_path):
                   ((obs.oname=='sfr') &
                    (obs.time=='1')), :]
     obs['time'].iloc[0] = 'one'
-    # should now fail converting to int and set all tslider to str
+    obs['time'].iloc[3] = 'two'
     pst.observation_data = obs
+    sel = 10
     vh = ppv.VisHandler(pst, wd=m_d)
-    with pytest.raises(IndexError):
-        # should not be able to click b\c default map not avail for default tslider value
-        vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[10]), None)
+    z = vh.map_widget.data[0].z[sel]
+    vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[sel]), None)
+    selval = _check_selval(vh, sel)
     vh.map_temporal_slider.value = 1
+    # this should kill the map bc selected sel not in time 1
+    try:
+        z2 = vh.map_widget.data[0].z[sel]
+    except IndexError:
+        pass
+    else:
+        raise Exception("should have KeyError")
+    vh.layer_selector.value = 1
+    # should only be one value now
+    assert len(vh.map_widget.data[0].z) == 1
+    z2 = vh.map_widget.data[0].z[0]
+    assert z2 != z
     # now map should be avail
-    vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[10]), None)
+    vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[0]), None)
+    selval = _check_selval(vh, 0)
+    assert selval == z2
 
 
 @pytest.mark.parametrize("option", ['model', 'grb', 'pkl'])

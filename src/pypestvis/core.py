@@ -642,14 +642,15 @@ class VisHandler(object):
             obscells = gph.idxmap.loc[self.obsval_dict[gp].index].cellid.values
         else:
             obscells = slice(None)
-        if t in gph.ens.index.unique(self.tidx):
+        try:
             if self.reals_or_ptile_radio.value == 'r':
                 seldf = gph.ens.loc[(obscells, k, t), (i, r)]
             else:
                 seldf = gph.qtiles.loc[(obscells, k, t), (i, f"P{int(p)}")]
             z = seldf.values
             locs = seldf.index.get_level_values('cellid')
-        else:
+        except KeyError:
+            print(f"no map data for group '{gp}' @ k:{k}, t:{t}")
             z = []
             locs = []
         if cr:
