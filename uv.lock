@@ -1989,6 +1989,7 @@ test = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "jupyterlab" },
     { name = "pandas-stubs" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -2015,6 +2016,7 @@ provides-extras = ["test", "extra"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "jupyterlab", specifier = ">=4.4.10" },
     { name = "pandas-stubs", specifier = ">=2.3.2.250926" },
     { name = "pytest", specifier = ">=9.0.1" },
     { name = "pytest-cov", specifier = ">=7.0.0" },

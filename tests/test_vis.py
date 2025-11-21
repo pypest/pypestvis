@@ -210,9 +210,23 @@ def profile_vis(wd=None, temp=Path('profiling'), crs=None):
     ps = pstats.Stats(pr).sort_stats('cumtime')
     ps.print_stats(40)
 
+    assert Path("assets", f"{vh.name}_modelgrid.json").exists()
+    pr = cProfile.Profile()
+    pr.enable()
+    vh = ppv.VisHandler(pst, wd=m_d, crs=crs)
+    pr.disable()
+    ps = pstats.Stats(pr).sort_stats('cumtime')
+    ps.print_stats(40)
+
+    # pr = cProfile.Profile()
+    # pr.enable()
+    # vh.
+
 if __name__ == '__main__':
     # test_vis('test')
-    alt = dict(wd=Path("..", "..", "ranger_ua", "master_precond"),
-               crs="EPSG:28353")
-    profile_vis(**alt)
+    profile_vis()
+    profile_vis(crs="epsg:32614")
+    # alt = dict(wd=Path("..", "..", "ranger_ua", "master_precond"),
+    #            crs="EPSG:28353")
+    # profile_vis(**alt)
     pass

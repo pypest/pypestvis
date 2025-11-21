@@ -85,7 +85,8 @@ class VisHandler(object):
                  mt=None,  # model time, needed for obs data
                  crs=None,  # coordinate reference system for the modelgrid -- will be converted to WGS84
                  groupby='obgnme',  # groupby for the obs data, default is obgnme
-                 tidx='time'):
+                 tidx='time',
+                 write_json=True,):
         """
 
         Parameters
@@ -109,6 +110,7 @@ class VisHandler(object):
         if isinstance(pst, (str, Path)):
             pst = pyemu.Pst(str(pst))
         self.pst = pst
+        self.name = Path(pst.filename).stem
 
         _mg = mg
         _mt = mt
@@ -123,10 +125,13 @@ class VisHandler(object):
         self.mt = mt
         self.tidx = tidx
 
+        if geojson is None:
+            geojson = Path("assets", f"{self.name}_modelgrid.json")
         self.geojson = get_geojson(geojson=geojson,
                                    mg=mg,
                                    crs=crs,
-                                   wd=wd)
+                                   wd=wd,
+                                   write=write_json)
 
         # lists for storing tags of mappable status of data groups
         self.gridmapable = []

@@ -17,7 +17,7 @@ def _sort_key(x):
         return (0, x)
 
 
-def mg2geojson(mg, wd=None, crs=None):
+def mg2geojson(mg, crs=None):
     """
     Convert model grid to GeoJSON format.
 
@@ -50,27 +50,31 @@ def mg2geojson(mg, wd=None, crs=None):
         geoms = geoms.to_crs(lcrs)
     cells = gpd.GeoDataFrame(cells, geometry=geoms)
     cells = cells.drop(columns=['in_verts']).set_index('cellid')
-    if wd is not None:
-        with open(Path(wd, f'model_grid.json'), "w") as f:
-            f.write(cells.to_json())
-    return json.loads(cells.to_json())
+    asjson = cells.to_json()
+    return json.loads(asjson)
 
 
-def get_geojson(geojson=None, mg=None, crs=None, wd=None):
+def get_geojson(geojson, mg=None, crs=None, wd=None,
+                write=False):
     import json
     assert any([geojson, mg, wd]), "one of geojson, mg, or wd must be provided"
     _mg = mg
-    if geojson is None:  # need a geojson for mapping -- it also need to have a property that is unigue
+    if isinstance(geojson, (str, Path)):
+        try:
+            with open(geojson, 'r') as fp:
+                geojson = json.load(fp)
+            return geojson  # will return without writing (all good)
+        except FileNotFoundError:
+            pass
         if mg is None:
             _mg, _ = get_mg_mt(wd)
         # and can be used to identify to map data to the grid (e.g a cellid)
-        geojson = mg2geojson(_mg,
-                             # if wd is passed, save the geojson to wd
-                             wd=wd,
-                             crs=crs)
-    if isinstance(geojson, (str, Path)):
-        with open(geojson, 'r') as fp:
-            geojson = json.load(fp)
+        _geojson = mg2geojson(_mg, crs=crs)
+        if write:
+            Path(geojson).parent.mkdir(parents=True, exist_ok=True)
+            with open(geojson, 'w') as fp:
+                json.dump(_geojson, fp)
+        geojson = _geojson
     return geojson
 
 

@@ -34,7 +34,8 @@ def test_json(tmp_path, md, crs):
         else:
             crs = "epsg:2913"
     # first from fallback path:
-    gjsn = get_geojson(wd=m_d, crs=crs)
+    gjsn = get_geojson(geojson=m_d / 'model_grid.json',
+                       wd=m_d, crs=crs, write=True)
     # this should have written a json file
     gjsn2 = get_geojson(geojson=m_d / 'model_grid.json')
     assert gjsn == gjsn2
