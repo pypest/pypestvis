@@ -86,7 +86,7 @@ class VisHandler(object):
                  crs=None,  # coordinate reference system for the modelgrid -- will be converted to WGS84
                  groupby='obgnme',  # groupby for the obs data, default is obgnme
                  tidx='time',
-                 write_json=True,):
+                 write_json=False,):
         """
 
         Parameters
