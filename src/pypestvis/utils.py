@@ -2,10 +2,8 @@
 Utils for vis builders
 """
 
-import pyemu
 import numpy as np
 from pathlib import Path
-import pandas as pd
 import pickle
 import warnings
 
@@ -15,6 +13,11 @@ def _sort_key(x):
         return (1, float(x))
     except ValueError:
         return (0, x)
+
+
+def get_cellid_fromij(idxs, shape):
+    # todo: this could be fleshed out to be more flexible
+    return np.ravel_multi_index(idxs, shape)
 
 
 def mg2geojson(mg, crs=None):
@@ -40,17 +43,26 @@ def mg2geojson(mg, crs=None):
         mg = get_mg_from_grb(mg)
     ib = mg.idomain.reshape(mg.shape)
     # Create a GeoDataFrame from the model grid
-    cells = pd.DataFrame(np.argwhere(ib != 0), columns=['k', 'i', 'j'])
+    # we are going to try and just create a single layer json
+    # this might work for struct and maybe disv bu disu will need something else.
+    # for now just using ij to build grid
+    cells = pd.DataFrame(np.argwhere(ib.any(axis=0)), columns=['i', 'j'])
     cells['in_verts'] = polygons(np.array(
         mg.get_cell_vertices(cells.i.values, cells.j.values)  # uses baked in flopy method
         ).transpose((2, 0, 1)).tolist())
-    cells['cellid'] = mg.get_node(cells[['k','i','j']].values.tolist())
+    cells['cellid'] = get_cellid_fromij(tuple(cells[['i','j']].values.T), mg.shape[1:])
+
+    # cells = pd.DataFrame(np.argwhere(ib != 0), columns=['k', 'i', 'j'])
+    # cells['in_verts'] = polygons(np.array(
+    #     mg.get_cell_vertices(cells.i.values, cells.j.values)  # uses baked in flopy method
+    #     ).transpose((2, 0, 1)).tolist())
+    # cells['cellid'] = mg.get_node(cells[['k','i','j']].values.tolist())
     geoms = gpd.GeoSeries(cells['in_verts'], crs=crs)
     if crs is not None: # project to lat/lon
         geoms = geoms.to_crs(lcrs)
     cells = gpd.GeoDataFrame(cells, geometry=geoms)
-    cells = cells.drop(columns=['in_verts']).set_index('cellid')
-    asjson = cells.to_json()
+    cells = cells.set_index('cellid').geometry
+    asjson = cells.to_json(show_bbox=False)
     return json.loads(asjson)
 
 

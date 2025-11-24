@@ -180,7 +180,7 @@ def test_lh(tmp_path, option):
     # put back on pest object
     pst.observation_data = obs
     vh = ppv.VisHandler(pst, wd=m_d, crs='EPSG:2913')
-    vh._cell_sel_id = 5408
+    vh._sel_cellid = 5408
     vh.highlight_cell()
     vh.update_maphisto()
     vh.unmap_group_selector.value = vh.unmap_group_selector.options[vh.unmap_group_selector.index + 1]
@@ -192,6 +192,8 @@ def test_lh(tmp_path, option):
 def profile_vis(wd=None, temp=Path('profiling'), crs=None):
     import cProfile
     import pstats
+    from plotly import callbacks
+
     if wd is None:
         wd = 'freyberg_ies'
         m_d = Path(temp, wd)
@@ -203,9 +205,17 @@ def profile_vis(wd=None, temp=Path('profiling'), crs=None):
         shutil.copytree(wd, m_d, dirs_exist_ok=True)
         pstfname = list(m_d.glob('*.pst'))[0]
         pst = pyemu.Pst(str(pstfname))
+    Path("assets", f"{Path(pst.filename).stem}_modelgrid.json").unlink(missing_ok=True)
     pr = cProfile.Profile()
     pr.enable()
-    vh = ppv.VisHandler(pst, wd=m_d, crs=crs)
+    vh = ppv.VisHandler(pst, wd=m_d, crs=crs, write_json=True)
+    pr.disable()
+    ps = pstats.Stats(pr).sort_stats('cumtime')
+    ps.print_stats(40)
+
+    pr = cProfile.Profile()
+    pr.enable()
+    vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[10]), None)
     pr.disable()
     ps = pstats.Stats(pr).sort_stats('cumtime')
     ps.print_stats(40)
@@ -224,7 +234,7 @@ def profile_vis(wd=None, temp=Path('profiling'), crs=None):
 
 if __name__ == '__main__':
     # test_vis('test')
-    profile_vis()
+    profile_vis(crs="epsg:32614")
     profile_vis(crs="epsg:32614")
     # alt = dict(wd=Path("..", "..", "ranger_ua", "master_precond"),
     #            crs="EPSG:28353")
