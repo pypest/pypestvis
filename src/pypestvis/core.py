@@ -707,17 +707,18 @@ class VisHandler(object):
         # called when map_obs_selector value changes
         # update group handler loaded for mapping
         self._tmp_map_gph = self.obs_gphandlers[self.map_obs_selector.value]
+        self.set_ensemble(propagate=False)
         # TODO: check vminvmax defaults
         self._uservminmax = False
         # propagate through to layer selection options
-        self._set_laysel_options()
+        self._set_laysel_options(change=change)
         # this will propagate to layer seleciton
         # and finally to tslider definition...
 
         # self.set_map(change=change)
 
     # map_obs_selector internal callback
-    def _set_laysel_options(self):
+    def _set_laysel_options(self, change=None):
         """
         Internal callback to set layer selector options based on
         current group handler and weighted obs checkbox status.
@@ -758,14 +759,14 @@ class VisHandler(object):
             lookup = lookup[lookup.weight != 0]
         kopt = sorted(lookup.index.unique(-2))
         # update options and values
-        # WILL TRIGGER LAYER SELECTOR CALLBACK (HOPEFULLY)
+        # WILL TRIGGER LAYER SELECTOR CALLBACK if ok changes
         if o_k is None or o_k not in kopt:
             self.layer_selector.options = kopt
             self.layer_selector.value = kopt[0]
         else:
             self.layer_selector.options = kopt
             self.layer_selector.value = o_k
-            self.select_map_layer()
+            self.select_map_layer(change=change)
 
     # layer_selector callback
     def select_map_layer(self, change=None):

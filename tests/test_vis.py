@@ -13,8 +13,11 @@ def spinup_freyberg(tmp):
     m_d = tmp / m_d.name
     pst = pyemu.Pst(str(m_d / "freyberg.pst"))
     obs = pst.observation_data
-    obs.loc[obs.oname == 'hds', ['k', 'i', 'j']] = obs.loc[obs.oname == 'hds'].obgnme.str.rsplit("_", expand=True, n=3)[
-        [1, 2, 3]].values
+    obs.loc[obs.oname == 'hds', ['k', 'i', 'j']] = \
+        obs.loc[obs.oname == 'hds'].obgnme.str.rsplit(
+            "_", expand=True, n=3)[[1, 2, 3]].values
+    # split hdar into a second group
+    obs.loc[(obs.obgnme == 'hdar') & (obs.i.astype("Int32")>20), 'obgnme'] = 'hdar2'
     pst.observation_data = obs
     return pst
 
@@ -48,6 +51,12 @@ def test_freyberg(tmp_path):
     selval = _check_selval(vh, sel)
     assert np.isclose(selval, z2) # should be same after click
 
+    # switch obgnme
+    vh.map_obs_selector.value = 'hdar2'
+    assert len(vh.map_histogram.data[0].x) == 0  # should have cleared histo
+    vh.map_obs_selector.value = 'hdar'
+
+    vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[sel]), None)
     vh.prob_slider.value = 90
     selval2 = _check_selval(vh, sel)
     assert selval2 > selval # should be larger at P90
