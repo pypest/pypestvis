@@ -62,11 +62,15 @@ class VisHandler(object):
 
         self._callback_off = False
         self._callback_off_count = 0
+
+        # Bring in control file -- lean on pyemu a lot
         if isinstance(pst, (str, Path)):
             pst = pyemu.Pst(str(pst))
         self.pst = pst
         self.name = Path(pst.filename).stem
 
+        # get spatial and temporal reference -- currently leaning on
+        # flopy and mf6 modelgrid/time
         _mg = mg
         _mt = mt
         if (mg is None) or (mt is None):
@@ -78,8 +82,10 @@ class VisHandler(object):
                 mt = _mt
         self.mg = mg
         self.mt = mt
+        # carry temporal slider index column name
         self.tidx = tidx
 
+        # need a geojson for mapping
         if geojson is None:
             geojson = Path("assets", f"{self.name}_modelgrid.json")
         self.geojson = get_geojson(geojson=geojson,
@@ -92,22 +98,28 @@ class VisHandler(object):
         self.gridmapable = []
         self.pointmapable = []
         self.unmapable = []
-        self.weighted = []
+        # self.weighted = []
 
+        # carry grouping column
         self.groupby = groupby
 
+        # initial widget placeholders
+        self.map_widget = None
+        self.map_histogram = None
+        self.unmap_histogram = None
+
+        # setup empty containers
         self.obs_gphandlers = {}
-        self.obsval_dict = {}
-        self.par_dict = {}
-        self.real_dict = {}
+        # self.obsval_dict = {}
+        self.par_dict = {}  # not yet implementing pars
+        self.real_dict = {}  # set in _build_obs_handlers()
         self._build_obs_handlers()
 
         # initial setting for callback status
         self._tmp_map_gph = None
-        self._tmp_map_kdf = None # current dataframe for mapped data at all tidxs
         self._tmp_map_kidxmap = None # current index map for mapped data at all tidxs
         self._tmp_map_idxmap = None
-        self._tmp_map_df = None # current dataframe for mapped data at selected tidx
+        # self._tmp_map_df = None # current dataframe for mapped data at selected tidx
         self._tmp_map_ens = None # current ensemble for mapped data at selected tidx
         self._sel_cellid = None
         self._sel_name = None
@@ -120,11 +132,11 @@ class VisHandler(object):
 
         # trigger map build
         if len(self.gridmapable) > 0 or len(self.pointmapable) > 0:
-            # should trigger set_map
+            # should trigger cascade through to set_map
             self.set_mapsel_options()
-        # if len(self.unmapable) > 0:
-        #     # should trigger set_unmap
-        #     self.set_unmap_options()
+        if len(self.unmapable) > 0:
+            # should trigger set_unmap
+            self.set_unmap_group()
 
     def __str__(self):
         return (f"VisHandler for Pst: '{str(self.name)}' with {len(self.obs_gphandlers)} obs groups:\n"
@@ -471,30 +483,31 @@ class VisHandler(object):
     def _set_widget_callbacks(self):
         """ Setting up widget initial states and callbacks
         """
+        # Ensemble selection callbacks
+        self.iter_selector.observe(self.set_ensemble, names=['value'])
+        self.reals_or_ptile_radio.observe(self.set_ensemble, names=['value'])
+
+        # Map widget callbacks
         self.weighted_obs_checkbox.observe(self.set_mapsel_options, names=['value'])
         self.map_obs_selector.observe(self.select_map_obs_gp, names=['value'])
         self.layer_selector.observe(self.select_map_layer, names=['value'])
         self.map_temporal_slider.observe(self.set_map, names=['value'])
-
-        self.iter_selector.observe(self.set_ensemble, names=['value'])
-        self.reals_or_ptile_radio.observe(self.set_ensemble, names=['value'])
         self.map_log_check.observe(self.set_map, names=['value'])
-
         self.prob_slider.observe(self.set_map, names=['value'])
         self.real_selector.observe(self.set_map, names=['value'])
 
+        # Map cbar mods -- needs more attention
         self.vminmaxbutton.on_click(self._reset_vminmax)
-
         self.cmap_selector.observe(self.set_map, names=['value'])
         self.cmap_reverse.observe(self.set_map, names=['value'])
-
         self._reset_vminmax()
         self.vminmaxslider.observe(self.set_vminmax, names=['value'])
 
+        # Unmap widget callbacks
+        self.unmap_group_selector.observe(self.set_unmap_group, names=['value'])
+        self.unmap_selector.observe(self.set_unmap_level, names=['value'])
+        self.unmap_temporal_slider.observe(self.set_unmap, names=['value'])
         self.unmap_log_check.observe(self.set_unmap, names=['value'])
-        self.unmap_temporal_slider.observe(self.set_unmap_options, names=['value'])
-        self.unmap_group_selector.observe(self.set_unmap_options, names=['value'])
-        self.unmap_selector.observe(self.set_unmap, names=['value'])
 
     def _get_plotly_mapfig(self):
         json = self.geojson
@@ -589,7 +602,40 @@ class VisHandler(object):
             if self._callback_off_count == 0:
                 self._callback_off = False
 
+    # weighted_obs_checkbox callback at top of map obs selection chain
     def set_mapsel_options(self, change=None):
+        """
+        Call back function triggered by weighted_obs_checkbox changes.
+        Updates of map_obs_selector options and triggers downstream updates of:
+        select_map_obs_gp() -> callback for map_obs_selector changes
+          _tmp_map_gph -> group handler for current group selection
+          _set_laysel_options(self)
+            layer_selector.options -> current layer options for mapping
+            select_map_layer()
+              _tmp_map_kidxmap -> index/name map for current mapping layer (including time)
+              _set_slider_options()
+              set_map()
+                if _tmp_map_ens is None:
+                    set_ensemble()
+                      _tmp_map_ens -> current iteration ensemble for mapping
+                      real_selector.options -> current realisation options iteration
+                _tmp_map_idxmap() -> index/name map for current mapping layer and time
+                _set_sel_name()
+                  _sel_name -> current selected (obs) name (may be None)
+                highlight_cell() [maybe set _sel_cellid = None]
+                update_maphisto_line()
+                  or
+                update_maphisto()
+                  _histomod()
+                  update_maphisto_line()
+        Parameters
+        ----------
+        change
+
+        Returns
+        -------
+
+        """
         if self._callback_off:
             return
         # called when weighted obs checkbox change
@@ -621,7 +667,40 @@ class VisHandler(object):
             # self.select_map_obs_gp(change=change)
             # self.set_map(change)
 
+    # map_obs_selector callback
     def select_map_obs_gp(self, change=None):
+        """
+        Call back function triggered by map_obs_selector changes.
+        Updates:
+        _tmp_map_gph -> group handler for current group selection
+        Triggers downstream:
+        _set_laysel_options(self)
+          layer_selector.options -> current layer options for mapping
+          select_map_layer()
+            _tmp_map_kidxmap -> index/name map for current mapping layer (including time)
+            _set_slider_options()
+            set_map()
+              if _tmp_map_ens is None:
+                set_ensemble()
+                  _tmp_map_ens -> current iteration ensemble for mapping
+                  real_selector.options -> current realisation options iteration
+              _tmp_map_idxmap() -> index/name map for current mapping layer and time
+              _set_sel_name()
+              _sel_name -> current selected (obs) name (may be None)
+              highlight_cell() [maybe set _sel_cellid = None]
+              update_maphisto_line()
+                or
+              update_maphisto()
+                _histomod()
+                update_maphisto_line()
+        Parameters
+        ----------
+        change
+
+        Returns
+        -------
+
+        """
         if self._callback_off:
             # if we are in a callback, don't do anything
             return
@@ -637,7 +716,36 @@ class VisHandler(object):
 
         # self.set_map(change=change)
 
+    # map_obs_selector internal callback
     def _set_laysel_options(self):
+        """
+        Internal callback to set layer selector options based on
+        current group handler and weighted obs checkbox status.
+        Updates:
+        layer_selector.options -> current layer options for mapping
+        Triggers downstream:
+        select_map_layer()
+          _tmp_map_kidxmap -> index/name map for current mapping layer (including time)
+          _set_slider_options()
+          set_map()
+            if _tmp_map_ens is None:
+              set_ensemble()
+                _tmp_map_ens -> current iteration ensemble for mapping
+                real_selector.options -> current realisation options iteration
+            _tmp_map_idxmap() -> index/name map for current mapping layer and time
+            _set_sel_name()
+              _sel_name -> current selected (obs) name (may be None)
+            highlight_cell() [maybe set _sel_cellid = None]
+            update_maphisto_line()
+              or
+            update_maphisto()
+              _histomod()
+              update_maphisto_line()
+
+        Returns
+        -------
+
+        """
         # called downstream when map obs group changes
         # get current layer selector value
         o_k = self.layer_selector.value
@@ -650,36 +758,71 @@ class VisHandler(object):
             lookup = lookup[lookup.weight != 0]
         kopt = sorted(lookup.index.unique(-2))
         # update options and values
-        # WILL TRIGGER LAYER SELECTOR CALLBACK
+        # WILL TRIGGER LAYER SELECTOR CALLBACK (HOPEFULLY)
         if o_k is None or o_k not in kopt:
             self.layer_selector.options = kopt
             self.layer_selector.value = kopt[0]
         else:
             self.layer_selector.options = kopt
             self.layer_selector.value = o_k
+            self.select_map_layer()
 
+    # layer_selector callback
     def select_map_layer(self, change=None):
+        """
+        Call back function triggered by layer_selector changes.
+        Updates:
+        _tmp_map_kidxmap -> index/name map for current mapping layer (including time)
+        Triggers downstream:
+        _set_slider_options()
+        set_map()
+          if _tmp_map_ens is None:
+            set_ensemble()
+              _tmp_map_ens -> current iteration ensemble for mapping
+              real_selector.options -> current realisation options iteration
+          _tmp_map_idxmap() -> index/name map for current mapping layer and time
+          _set_sel_name()
+            _sel_name -> current selected (obs) name (may be None)
+          highlight_cell() [maybe set _sel_cellid = None]
+          update_maphisto_line()
+            or
+          update_maphisto()
+          _histomod()
+          update_maphisto_line()
+
+        Parameters
+        ----------
+        change
+
+        Returns
+        -------
+
+        """
         # called when layer selector changes
         kdf = self._tmp_map_gph.group_info.xs(self.layer_selector.value,
                                               level=-2)
         if self.weighted_obs_checkbox.value:
             # filter to weighted only
             kdf = kdf[kdf.weight != 0]
-        self._tmp_map_kdf = kdf
         # DEFINE INDEX MAP FOR SELECTED LAYER
         # -- this is ths key attribute for slicing at runtime
-        self._tmp_map_kidxmap = self._tmp_map_kdf.ensmap
+        self._tmp_map_kidxmap = kdf.ensmap
         # propagate through to temporal slider
         with self.callback_off():
-            self._set_slider_options(self.map_temporal_slider)
+            self._set_slider_options(self.map_temporal_slider,
+                                     self._tmp_map_kidxmap)
         # this now?
         self.set_map(change=change)
 
-    def _set_slider_options(self, slider=None, description="Time:"):
+    # layer_selector internal callback
+    def _set_slider_options(self, slider=None, idxmap=None,
+                            description="Time:"):
         if slider is None:
             slider = self.map_temporal_slider
+        if idxmap is None:
+            idxmap = self._tmp_map_kidxmap
         t = self._get_tidx(slider)
-        options = self._tmp_map_kdf.index.unique(self.tidx).tolist()
+        options = idxmap.index.unique(self.tidx).tolist()
         isnone = True
         try:
             options.remove('none')
@@ -691,10 +834,12 @@ class VisHandler(object):
 
         if len(options) < 2:
             slider.disabled = True
-        i = options.index(t) if t in options else 0
+        else:
+            slider.disabled = False
+        val = options.index(t) if t in options else 0
         options = [(t, i) for i, t in enumerate(options)]
         slider.options = options
-        slider.value = i
+        slider.value = val
         slider.description = description
 
     def set_ensemble(self, change=None, propagate=True):
@@ -718,18 +863,33 @@ class VisHandler(object):
         if propagate:
             self.set_map(change=change)
 
-    # def rpchange(self, change):
-    #     if change.new == 'r':
-    #         self._tmp_map_ens = self._tmp_map_gph.ens.copy()
-    #         self.real_selector.disabled = False
-    #         self.prob_slider.disabled = True
-    #     else:
-    #         self._tmp_map_ens = self._tmp_map_gph.ens.copy()
-    #         self.real_selector.disabled = True
-    #         self.prob_slider.disabled = False
-    #     self.set_map(change)
-
     def set_map(self, change=None, mapfig=None):
+        """
+        Call back function to set map data onto map widget based on current selections.
+        Calls downstream:
+        if _tmp_map_ens is None:
+          set_ensemble()
+            _tmp_map_ens -> current iteration ensemble for mapping
+            real_selector.options -> current realisation options iteration
+        _tmp_map_idxmap() -> index/name map for current mapping layer and time
+        _set_sel_name()
+          _sel_name -> current selected (obs) name (may be None)
+        highlight_cell() [maybe set _sel_cellid = None]
+        update_maphisto_line()
+          or
+        update_maphisto()
+          _histomod()
+          update_maphisto_line()
+
+        Parameters
+        ----------
+        change
+        mapfig
+
+        Returns
+        -------
+
+        """
         if self._callback_off:
             # if we are in a callback, don't do anything
             return
@@ -758,7 +918,7 @@ class VisHandler(object):
         if self.reals_or_ptile_radio.value == 'r':
             c = self.real_selector.value
         else:
-            c = self.prob_slider.value
+            c = int(self.prob_slider.value)
 
         # get current selected iteration
         cmap = self.cmap_selector.value
@@ -1019,7 +1179,7 @@ class VisHandler(object):
             self._sel_ensdf = self._tmp_map_gph.ens.xs(idx)
         except KeyError as err:
             # TODO better handling of missed idx (obsnme)
-            print(f"'{idx}' not found in cached ensemble for group '{gph.name}'")
+            print(f"'{idx}' not found in cached ensemble for group '{gp}'")
             self.map_histogram.update_traces(x=[])
             return
         self._histomod(self.map_histogram, self._sel_ensdf, gp,
@@ -1027,23 +1187,16 @@ class VisHandler(object):
         self.update_maphisto_line()
 
     def update_maphisto_line(self):
-        cellid = self._sel_cellid
+        # cellid = self._sel_cellid
         idx = self._sel_name
         if idx is None:
             self.map_histogram.update_traces(x=[] * 50, selector=dict(name=f"mapval"))
             return
         rp = self.reals_or_ptile_radio.value
-        t = self._get_tidx(self.map_temporal_slider)
-        k = self.layer_selector.value
-        i = self.iter_selector.value
         if rp == 'r':
             v = self.real_selector.value
-            # data = self.obs_gphandlers[self.map_obs_selector.value].ens
-            # csel = (i, v)
         else:
             v = int(self.prob_slider.value)
-            # data = self.obs_gphandlers[self.map_obs_selector.value].qtiles
-            # csel = (i, f"P{int(v)}")
         data = self._tmp_map_ens.loc[idx, v]
         if self.map_log_check.value and data is not None:
             data = np.log10(data)
@@ -1053,31 +1206,53 @@ class VisHandler(object):
             # Remove any existing vertical line
             self.map_histogram.update_traces(x=[data] * 50, selector=dict(name=f"mapval"))
 
-    def set_unmap_options(self, change=None):
+    def set_unmap_group(self, change=None):
+        """
+        Call back function triggered by unmap_group_selector changes.
+        Propagates downstream to set_unmap_options()
+        Parameters
+        ----------
+        change
+
+        Returns
+        -------
+
+        """
         if self._callback_off:
             # if we are in a callback, don't do anything
             return
         # if group selector changes, need to update obs selector options
         # dependent on the selected time (this can get circular!)
+        # so we will roll time last up (same as with map)
         print("Setting unmap options...")
         gsel = self.unmap_group_selector.value
-        osel = self.unmap_selector.value
         gph = self.obs_gphandlers[gsel]
-        # if unmap group has changed need to revaluate temporal slider options
-        with self.callback_off():
-            self._set_slider_options(self.unmap_temporal_slider)
-        opts = self.obs_gphandlers[gsel].ens.index.to_frame()
-        t = self._get_tidx(self.unmap_temporal_slider)
+        # set tmp attibutes for quick lookup later
+        self._tmp_unmap_gph = gph
+        self._tmp_unmap_gidxmap = gph.group_info.ensmap
+        # get current unmap selector value
+        osel = self.unmap_selector.value
+        opts = self._tmp_unmap_gidxmap.index.unique(0)
         # todo time may or may not be part of this...?
-        self.unmap_selector.options=opts.loc[opts[self.tidx] == t].index.unique(level=0)
+        self.unmap_selector.options=opts
         if osel in self.unmap_selector.options:
             self.unmap_selector.value = osel
         else:
             self.unmap_selector.value = self.unmap_selector.options[0]
-        # if unmapselector.value is changed by the above set_unmap will already have been triggered
-        # catch the instance where the value is not changed
         if osel == self.unmap_selector.value:
-            self.set_unmap()
+            self.set_unmap_level()
+
+    def set_unmap_level(self, change=None):
+        ens = self._tmp_unmap_gph.ens
+        l2 = self.unmap_selector.value
+        idx = self._tmp_unmap_gidxmap.xs(l2, level=0)
+        self._tmp_unmap_idxmap = idx
+        ens = ens.loc[idx.values, :]
+        self._tmp_unmap_ens = ens
+        with self.callback_off():
+            self._set_slider_options(self.unmap_temporal_slider,
+                                     self._tmp_unmap_gidxmap)
+        self.set_unmap(change=change)
 
     def set_unmap(self, change=None):
         if self._callback_off:
@@ -1085,18 +1260,14 @@ class VisHandler(object):
             return
         # if unmap observation changed need to update histogram
         print("Setting unmap...")
-        gsel = self.unmap_group_selector.value
-        gph = self.obs_gphandlers[gsel]
+        gsel = self._tmp_unmap_gph.name
         t = self._get_tidx(self.unmap_temporal_slider)  # todo time may or may not be part of this...?
-        v = self.unmap_selector.value
+        ens = self._tmp_unmap_ens
+        idx = self._tmp_unmap_idxmap.xs(t)
         try:
-            seldf = gph.ens.loc[(v, [t]), :]
-            if len(seldf) > 1:
-                warnings.warn("output and tidx match more than one output",
-                              UserWarning)
-            seldf = seldf.iloc[0]
+            seldf = ens.xs(idx)
         except KeyError:
-            seldf = pd.DataFrame()
+            seldf = pd.Series([])
         with self.unmap_histogram.batch_update():
             self._histomod(self.unmap_histogram, seldf, gsel,
                            log=self.unmap_log_check.value)

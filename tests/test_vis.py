@@ -125,23 +125,30 @@ def test_t_str(tmp_path):
     z = vh.map_widget.data[0].z[sel]
     vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[sel]), None)
     selval = _check_selval(vh, sel)
+    # default k should be 0 and only 1 time
+    assert 1 not in [i for v,i in vh.map_temporal_slider.options]
+    vh.layer_selector.value = '1'
+    # sel should be diff as active locations different in layer 1
+    sel2 = np.where(vh.map_widget.data[0].locations == vh._sel_cellid)[0][0]
+    selval = _check_selval(vh, sel2)
+    z2 = vh.map_widget.data[0].z[sel2]
+    assert z2 != z
     vh.map_temporal_slider.value = 1
-    # this should kill the map bc selected sel not in time 1
-    try:
-        z2 = vh.map_widget.data[0].z[sel]
-    except IndexError:
-        pass
-    else:
-        raise Exception("should have KeyError")
-    vh.layer_selector.value = 1
     # should only be one value now
     assert len(vh.map_widget.data[0].z) == 1
-    z2 = vh.map_widget.data[0].z[0]
-    assert z2 != z
+    z3 = vh.map_widget.data[0].z[0]
+    assert z3 != z2
     # now map should be avail
     vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[0]), None)
     selval = _check_selval(vh, 0)
-    assert selval == z2
+    assert selval == z3
+    vh.layer_selector.value = '0'
+    vh.map_temporal_slider.value = 0
+    vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[sel]), None)
+    selval = _check_selval(vh, sel)
+    assert selval == z
+
+
 
 
 @pytest.mark.parametrize("option", ['model', 'grb', 'pkl'])
@@ -234,9 +241,9 @@ def profile_vis(wd=None, temp=Path('profiling'), crs=None):
 
 if __name__ == '__main__':
     # test_vis('test')
-    profile_vis(crs="epsg:32614")
-    profile_vis(crs="epsg:32614")
-    # alt = dict(wd=Path("..", "..", "ranger_ua", "master_precond"),
-    #            crs="EPSG:28353")
-    # profile_vis(**alt)
+    # profile_vis(crs="epsg:32614")
+    # profile_vis(crs="epsg:32614")
+    alt = dict(wd=Path("..", "..", "ranger_ua", "master_precond"),
+               crs="EPSG:28353")
+    profile_vis(**alt)
     pass
