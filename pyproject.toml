@@ -47,3 +47,12 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src/pypestvis"]
+parallel = true
+relative_files = true
+patch = ["subprocess"]
+omit = [
+    "*/tests/*"
+    ]
