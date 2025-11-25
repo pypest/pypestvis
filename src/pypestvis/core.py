@@ -361,7 +361,7 @@ class VisHandler(object):
             options=self.pointmapable,  # list of point based output groups that can map to scatter maps
             # value=self.gridmapable[0],
             description='Scatter datasets:',
-            disabled=False if len(self.gridmapable) > 0 else True,
+            disabled=False if len(self.pointmapable) > 0 else True,
         )
         # Layer selector mappable obs
         self.layer_selector = ipyw.Dropdown(
@@ -567,6 +567,7 @@ class VisHandler(object):
                           '<extra></extra>',
             name='cpmap'
         )
+        # TODO: add scatter widget for point mappables!!
         fig = go.Figure(cpmap, layout=layout)
         # self.set_map(mapfig=fig)
         fig = go.FigureWidget(fig)
