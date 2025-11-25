@@ -1,6 +1,6 @@
 """Core functionality of pypestvis"""
 
-__all__ = ["VisHandler", "VisGroupHandler"]
+__all__ = ["VisHandler"]
 
 import pandas as pd
 import plotly.colors as pc
@@ -14,68 +14,14 @@ import warnings
 from shapely.geometry import shape
 from ipywidgets import VBox, HBox, Box, Layout
 
-from .utils import _guess_mappable, get_mg_mt, mg2geojson, _sort_key
-
-
-class VisGroupHandler(object):
-    """
-    Handler Class for groups in the web application.
-    """
-    def __init__(self, df, mg, ens=None, tidx='time'):
-        """
-        Parameters
-        ----------
-        df : pd.DataFrame
-        mg : flopy.ModelGrid
-            Used for getting cellid or x,y from k,i,j metadata stored in df
-        ens : pd.DataFrame, optional
-            Ensemble indexed by obs/par names with columns as multiindex of (iterations, realization).
-        tidx : str, optional
-            A column in observation dataframe to use as temporal indexer for slider widget selection.
-            Default is 'time'. which will be inferred from kper, kstp if absent and mt is passed.
-        """
-        self.mapable = _guess_mappable(df)
-        if self.mapable == 'grid':
-            df['cellid'] = mg.get_node(df[['k','i','j']].values.tolist())
-        if self.mapable == 'point':
-            if 'x' not in df.columns:
-                df['x'] = mg.xcellcenters[df.i.values, df.j.values]
-            if 'y' not in df.columns:
-                df['y'] = mg.ycellcenters[df.i.values, df.j.values]
-            df = df.fillna({'x': pd.Series(mg.xcellcenters[df.i.values, df.j.values]),
-                           'y': pd.Series(mg.ycellcenters[df.i.values, df.j.values])})
-
-        self.metadf = df.copy()
-        if self.mapable == 'grid':
-            idxcols = ['cellid', 'k', tidx]
-        elif self.mapable == 'point':
-            idxcols = ['x', 'y', 'k', tidx]
-        else:
-            idxcols = ['usecol', tidx]
-        idxname = df.index.name
-        self.idxmap = df.loc[:, idxcols]
-        self.idxmap_r = self.idxmap.reset_index().groupby(idxcols)[idxname].unique()
-
-        if ens is None:
-            self.ens = None
-            self.qtiles = None
-        else:
-            gpens = ens.loc[df.index, :].copy()
-            gpens.index = pd.MultiIndex.from_frame(df[idxcols])
-            self.ens = gpens
-            self.qtiles = self.ens.T.groupby(level='iteration').quantile(
-                np.linspace(start=0, stop=1, num=21)
-            ).T
-            # rename percentiles
-            self.qtiles.columns = self.qtiles.columns = self.qtiles.columns.set_levels(
-                self.qtiles.columns.levels[1].map(lambda x: f"P{int(100 * x)}"),
-                level=1
-            )
+from .utils import (_guess_mappable, get_mg_mt,
+                    _sort_key, get_geojson, get_cellid_fromij)
 
 
 class VisHandler(object):
     """
-    Handler for visualizations in the web application. Currently flopy mf6 modelgrid dependent.
+    Handler for visualizations in the web application. Currently flopy mf6
+    modelgrid dependent.
     """
     def __init__(self,
                  pst,
@@ -83,30 +29,67 @@ class VisHandler(object):
                  wd=None,  # working directory for the model, needed to get mg from grb, also a save location
                  mg=None,  # needed for referencing kij to json, also can be used to build json if geojson is absent
                  mt=None,  # model time, needed for obs data
-                 crs='epsg:2193',  # coordinate reference system for the modelgrid -- will be converted to WGS84
+                 crs=None,  # coordinate reference system for the modelgrid -- will be converted to WGS84
                  groupby='obgnme',  # groupby for the obs data, default is obgnme
-                 tidx='time'):
+                 tidx='time',
+                 write_json=False,):
         """
 
         Parameters
         ----------
         pst : pyemu.Pst or str or Path
-        geojson : str or dict, optional
+            Pest control file for project
+        geojson : str or json, optional
+            Geojson file dict for model grid features for plotting
         wd : str or Path, optional
+            Project working directory for the model. Needed if either mg or mt
+            are None.
         mg : flopy.ModelGrid, optional
+            Flopy (for now) model grid definition for the model. Needed if
+            geojson is None.
         mt : flopy.ModelTime, optional
+            Flopy (for now) model time definition for the model. Needed for
+            time referencing of obs data.
         crs : str, optional
-            Optional coordinate reference system for the model grid. Only used if geojson is None when it is passed to
-            constructor method `mg2geojson` to build json from modelgrid object.
-            Default is 'epsg:2193'.
+            Coordinate reference system for the model grid.
+            Only used if geojson is None when it is passed to constructor
+            method `mg2geojson` to build json from modelgrid object.
+            Defaults to None -- will not attempt to project from model coord
+            to lat/lon.
         groupby : str, optional
-        tidx: str, optional
+            Column name in pst.observation_data to group observations by.
+            Default is 'obgnme'.
+        tidx : str, optional
+            Column name in pst.observation_data to use as temporal index for
+            time slider. Default is 'time'.
+        write_json : bool, optional
+            Write geojson to file if geojson is None and
+            needs to be built from modelgrid. Default is False.
+            If True will write to assets/{pstname}_modelgrid.json as default
+            (supposedly for faster browser cacheing).
         """
+
+        self.__pst = pst
+        self.__geojson = geojson
+        self.__wd = wd
+        self.__mg = mg
+        self.__mt = mt
+        self.__crs = crs
+        self.__groupby = groupby
+        self.__tidx = tidx
+        self.__write_json = write_json
+
         self._callback_off = False
+        self._callback_off_count = 0
+
+        # Bring in control file -- lean on pyemu a lot
         if isinstance(pst, (str, Path)):
             pst = pyemu.Pst(str(pst))
         self.pst = pst
+        self.name = Path(pst.filename).stem
 
+        # get spatial and temporal reference -- currently leaning on
+        # flopy and mf6 modelgrid/time
         _mg = mg
         _mt = mt
         if (mg is None) or (mt is None):
@@ -118,56 +101,310 @@ class VisHandler(object):
                 mt = _mt
         self.mg = mg
         self.mt = mt
+        # carry temporal slider index column name
         self.tidx = tidx
 
-        if geojson is None: # need a geojson for mapping -- it also need to have a property that is unigue
-                            # and can be used to identify to map data to the grid (e.g a cellid)
-            geojson = mg2geojson(mg, crs=crs)
-        if isinstance(pst, (str, Path)):
-            with open(geojson, 'r') as fp:
-                geojson = geojson.load(fp)
-        self.geojson = geojson
+        # need a geojson for mapping
+        if geojson is None:
+            # set to default value
+            geojson = Path("assets", f"{self.name}_modelgrid.json")
+        self.geojson = get_geojson(geojson=geojson,
+                                   mg=mg,
+                                   crs=crs,
+                                   wd=wd,
+                                   write=write_json)
 
         # lists for storing tags of mappable status of data groups
         self.gridmapable = []
         self.pointmapable = []
         self.unmapable = []
-        self.weighted = []
+        # self.weighted = []
 
+        # carry grouping column
         self.groupby = groupby
 
-        self.obs_dict = {}
-        self.obsval_dict = {}
-        self.par_dict = {}
-        self.real_dict = {}
+        # initial widget placeholders
+        self.map_widget = None
+        self.map_histogram = None
+        self.unmap_histogram = None
+
+        # setup empty containers
+        self.obs_gphandlers = {}
+        # self.obsval_dict = {}
+        self.par_dict = {}  # not yet implementing pars
+        self.real_dict = {}  # set in _build_obs_handlers()
         self._build_obs_handlers()
-        self._cell_sel_id = None
+
+        # initial setting for callback status
+        self._tmp_map_gph = None
+        self._tmp_map_kidxmap = None # current index map for mapped data at all tidxs
+        self._tmp_map_idxmap = None
+        # self._tmp_map_df = None # current dataframe for mapped data at selected tidx
+        self._tmp_map_ens = None # current ensemble for mapped data at selected tidx
+        self._sel_cellid = None
+        self._sel_name = None
+        self._sel_ensdf = None
         self._uservminmax = False # for storing if user has set vmin/vmax
-        self._set_widgets()
 
-    @contextmanager
-    def callback_off(self):
-        self._callback_off = True
+        # build widgets and setup callbacks
+        self._build_widgets()
+        self._set_widget_callbacks()
+
+        # trigger map build
+        if len(self.gridmapable) > 0 or len(self.pointmapable) > 0:
+            # should trigger cascade through to set_map
+            self.set_mapsel_options()
+        if len(self.unmapable) > 0:
+            # should trigger set_unmap
+            self.set_unmap_group()
+
+    def __str__(self):
+        return (f"VisHandler for Pst: '{str(self.name)}' with {len(self.obs_gphandlers)} obs groups:\n"
+                '\n'.join(self.obs_gphandlers.keys()))
+
+
+    def __repr__(self):
+        return ("VisHandler(\n"
+                fr"    pst={str(self.__pst)},"'\n'
+                fr"    geojson={str(self.__geojson)},"'\n'
+                fr"    wd='{str(self.__wd)}',"'\n'
+                fr"    mg={str(self.__mg)},"'\n' 
+                fr"    mt={str(self.__mt)}," + '\n'
+                fr"    crs='{str(self.__crs)}',"'\n'
+                fr"    groupby='{str(self.groupby)}',"'\n'
+                fr"    tidx='{str(self.tidx)}',"'\n'
+                fr"    write_json={str(self.__write_json)}"'\n'
+                ')')
+
+
+    class VisGroupHandler(object):
+        """
+        Handler Class for groups in the web application.
+        """
+
+        def __init__(self, parent, df, gpname, ens=None, obsplus=None):
+            """
+            Parameters
+            ----------
+            parent : VisHandler
+                Parent VisHandler object
+            df : pd.DataFrame
+            ens : pd.DataFrame, optional
+                Ensemble indexed by obs/par names with columns as multiindex
+                of (iterations, realization).
+            obsplus : pd.DataFrame, optional
+                Ensemble of observation noise values
+                indexed by obs names with columns as multiindex of
+                (iterations, realization).
+            """
+            self.__parent = parent
+            self.__df = df
+            self.__ens = ens
+            self.__obsplus = obsplus
+
+            mg = parent.mg
+            tidx = parent.tidx
+            self.name = gpname
+            layer_col = 'k'
+            # check status of i,j columns
+            if df.i.notna().all() & df.j.notna().all():
+                # make sure ij etc are int32 for indexing
+                # dont need to be nullable int and better for downstream
+                # numpy methods
+                df = df.astype({'i': int, 'j': int})
+            # work out if grid, point, or unmap outputs
+            self.mapable = _guess_mappable(df)
+
+            if self.mapable == 'grid':  # can place on a grid
+                # update parent class with name of group
+                parent.gridmapable.append(gpname)
+                # need to get cellid from so we can ref to json
+                # todo: support cellid already being there
+                df['cellid'] = get_cellid_fromij(tuple(df[['i', 'j']].values.T), mg.shape[1:])
+                idxcols = ['cellid', 'k', tidx]
+            elif self.mapable == 'point':
+                # may not be fully implemented but would need x,y locations
+                # to map to scatter
+                # (note may need a projection step here or later)
+                parent.pointmapable.append(gpname)
+                if 'x' not in df.columns:
+                    df['x'] = np.nan
+                if 'y' not in df.columns:
+                    df['y'] = np.nan
+                df = df.fillna({'x': pd.Series(mg.xcellcenters[df.i.values, df.j.values]),
+                                'y': pd.Series(mg.ycellcenters[df.i.values, df.j.values])})
+                idxcols = ['x', 'y', 'k', tidx]
+            else:
+                # update parent class with name of group
+                parent.unmapable.append(gpname)
+                # assuming usecol is unique identifier for unmapable obs
+                idxcols = ['usecol', tidx]
+
+            # make sure that there is something in the time index columns
+            # incols = df.columns.intersection({'kper', 'kstp', 'k', 'i', 'j'})
+            # obs = obs.astype({c: "Int32" for c in incols})
+            if tidx == 'time': # tidx passed to parent class
+                # default is 'time', so infer from kper/kstp if absent
+                if 'time' not in df.columns:
+                    df['time'] = np.nan
+                # can only do this if we have some reference to build
+                # this could be user built ahead of calling this class
+                if parent.mt is not None and df.time.isna().any():
+                    # if we have time translation info
+                    # and if and null in that column
+                    # this will need generalising
+                    if 'kper' in df.columns:
+                        kperkstp = df.kper.fillna(0).to_frame()  # fill na with 0 for now
+                        if 'kstp' in df.columns:
+                            kperkstp['kstp'] = df.kstp
+                        else:
+                            kperkstp['kstp'] = np.nan
+                        kperkstp = kperkstp.astype("Int32")
+                        df['time'] = df.time.fillna(
+                            kperkstp.apply(
+                                lambda x: parent.mt.get_elapsed_time(
+                                    x.kper,
+                                    x.kstp if not pd.isna(x.kstp) else None
+                                ), axis=1).astype(float)
+                        )
+            # At the moment, we want whatever is in tidx to be sortable
+            # so all need to be the same dtype
+            if df[tidx].apply(pd.api.types.is_number).any():
+                try:
+                    df[tidx] = pd.to_numeric(df[tidx], downcast="integer")
+                except Exception:
+                    df[tidx] = df[tidx].astype(str)
+            # fill nans in tidx with 'none' for more
+            # reliable grouping and indexing -- need to split out none when sorting later
+            df = df.fillna({tidx: 'none'})
+
+            # self.idxmap = df.loc[:, idxcols]
+            # self.idxmap_r = self.idxmap.reset_index().groupby(idxcols)[name].unique()
+
+            if ens is None:
+                self.ens = None
+                self.qtiles = None
+            else:
+                # slice out group from ensemble
+                gpens = ens.loc[df.index, :].copy()
+                # set ensemble index to multiindex
+                # actually, let's leave this as obs/parnames
+                # gpens.index = pd.MultiIndex.from_frame(df[idxcols])
+                self.ens = gpens
+                self.qtiles = self.ens.T.groupby(level='iteration').quantile(
+                    np.linspace(start=0, stop=1, num=21)
+                ).T
+                # rename percentiles
+                self.qtiles.columns = self.qtiles.columns = self.qtiles.columns.set_levels(
+                    self.qtiles.columns.levels[1].map(lambda x: int(100 * x)),
+                    level=1
+                )
+            weighted = df.weight != 0
+            if (weighted).any():
+                wobs = df.loc[weighted]
+                # todo: catch and forgive absent noise ensembles
+                if obsplus is not None and len(wobs.index.intersection(obsplus.index)) > 0:
+                    self.obsplus = obsplus.loc[wobs.index, :]
+                else:
+                    self.obsplus = pd.DataFrame(index=wobs.index,
+                                                data=wobs.obsval.values)
+            else:
+                self.obsplus = None
+
+            # set the index columns for fast lookups in interaction later
+            # this is going to form the basis for the onclick actions
+            # will slice by the second last level (layer) on layer selection
+            # then slice by the last level (time) on time slider change
+            self.group_info = df.reset_index(names=['ensmap']).set_index(idxcols)
+
+        def __str__(self):
+            return (f"VisGroupHandler for '{self.name}' with {len(self.group_info)} obs\n"
+                    f"Mapable status: {self.mapable}\n"
+                    f"Ensemble members: {self.ens.shape[1] if self.ens is not None else 0}\n"
+                    f"Weighted obs: {self.obsplus.shape[0] if self.obsplus is not None else 0}")
+
+        def __repr__(self):
+            return self.__str__() + "\n" + str(self.group_info)
+
+    # Group handler construction
+    def _build_obs_handlers(self):
+        obs = self.pst.observation_data
+        ens = self.pst.ies.obsen.T
+        if 'iteration' not in ens.columns.names:
+            ens = pd.concat({0: ens}, axis=1, names=['iteration'])
+        # handy lookup for realizations for each iteration
+        self.real_dict = ens.columns.to_frame(False).groupby('iteration').realization.unique().to_dict()
         try:
-            yield
-        finally:
-            self._callback_off = False
+            noise = self.pst.ies.noise.T
+        except Exception:
+            noise = None
+        self.nonzero_groups = []
+        for gp, obdf in obs.groupby(self.groupby):
+            gph = self.VisGroupHandler(self, obdf, gp, ens=ens, obsplus=noise)
+            self.obs_gphandlers[gp] = gph
+            if gph.obsplus is not None and len(gph.obsplus) > 0:
+                self.nonzero_groups.append(gp)
 
-    def _set_widgets(self):
-        gridw = self.obsval_dict.keys() & self.gridmapable
-        self.wobselector = ipyw.Checkbox(
-            value=False,
-            description="Weighted only",
-            disabled=False if len(gridw) > 0 else True,
-            indent=False
-        )
-
-        self.mapselector = ipyw.RadioButtons(
-            options=self.gridmapable,
+    # Widget Construction
+    def _build_widgets(self):
+        # Mapable widgets
+        if len(self.gridmapable) > 0 or len(self.pointmapable) > 0:
+            self.map_widget, self.map_histogram = self._get_plotly_mapfig() if self.geojson else (None, None)
+        # Mappable and observation selection
+        self.map_obs_selector = ipyw.RadioButtons(
+            options=self.gridmapable,  # list of grid based output groups that can map to json features
             # value=self.gridmapable[0],
             description='Gridded datasets:',
-            disabled=False
+            disabled=False if len(self.gridmapable) > 0 else True,
         )
+        self.point_obs_selector = ipyw.RadioButtons(
+            options=self.pointmapable,  # list of point based output groups that can map to scatter maps
+            # value=self.gridmapable[0],
+            description='Scatter datasets:',
+            disabled=False if len(self.pointmapable) > 0 else True,
+        )
+        # Layer selector mappable obs
+        self.layer_selector = ipyw.Dropdown(
+            options=[], # set later based on selected obs group?
+            value=None, # dito
+            # description='Layer:',
+            disabled=False,
+            layout={'width': '100px',
+                    'margin': '0px 20px 0px 0px'}
+        )
+        # Temporal slider for mapping things in time
+        self.map_temporal_slider = ipyw.SelectionSlider(
+            options=[()], # set later based on selected obs group?
+            # value=None, # dito
+            continuous_update=False,
+            orientation='horizontal',
+            readout=True,
+            # readout_format='.0f',
+        )
+
+        # Colormap selector and reverse checkbox
+        self.cmap_selector = ipyw.Dropdown(
+            options=pc.named_colorscales(),
+            value='Plasma'.lower(),
+            description='Colorscale:',
+            layout={"justify_content": "flex-start"},
+            style={'description_width': 'initial'}
+        )
+        self.cmap_reverse = ipyw.Checkbox(
+            value=False,
+            description="Reverse cmap",
+            disabled=False,
+            layout={"align_self": "flex-start",
+                    "justify_content": "flex-start"},
+            indent=False
+        )
+        self.map_log_check = ipyw.Checkbox(value=False,
+                                           description="Logscale",
+                                           disabled=False,
+                                           layout={"align_self": "flex-start",
+                                                   "justify_content": "flex-start"},
+                                           indent=False)
+        # Colormap vmin/vmax slider and reset button
         self.vminmaxslider = ipyw.FloatRangeSlider(
             value=[-1e30, 1e30],
             min=-1e30,
@@ -179,7 +416,7 @@ class VisHandler(object):
             orientation='horizontal',
             readout=True,
             readout_format='.2f',
-            style ={"description_width":'inital'},
+            style={"description_width": 'inital'},
         )
         self.vminmaxbutton = ipyw.Button(
             description='Reset range',
@@ -188,27 +425,57 @@ class VisHandler(object):
             tooltip='Rest vmin/vmax to data range',
             icon="arrows-left-right-to-line"
         )
-        self.vminmaxbutton.on_click(self._reset_vminmax)
-
+        # combined widget
         self.vminvmax = VBox([self.vminmaxslider, self.vminmaxbutton])
 
-        self.layselector = ipyw.Dropdown(
-            options=[],
-            value=None,
-            # description='Layer:',
-            disabled=False,
-            layout={'width': '100px',
-                    'margin': '0px 20px 0px 0px'}
-        )
+        # NON mapable widgets
+        um = self.unmapable
+        ig = None
+        if len(um) > 0:
+            self.unmap_histogram = self._get_plotly_unmapfig()
+            ig = um[0]
+        self.unmap_group_selector = ipyw.Dropdown(options=self.unmapable,
+                                                  description="Non-mappable groups: ",
+                                                  value=ig,
+                                                  style={'description_width': 'initial'})
+        self.unmap_selector = ipyw.Dropdown(options=[],  # set later
+                                            description="Non-mappable obs: ",
+                                            value=None,
+                                            style={'description_width': 'initial'})
 
-        self.rpselector = ipyw.RadioButtons(
+        # Temporal slider for unmapable obs
+        self.unmap_temporal_slider = ipyw.SelectionSlider(
+            options=[()],
+            continuous_update=False,
+            orientation='horizontal',
+            readout=True,
+        )
+        # log checkbox for unmapable obs
+        self.unmap_log_check = ipyw.Checkbox(value=False,
+                                             description="Logscale",
+                                             disabled=False,
+                                             layout={"align_self": "flex-start",
+                                                     "justify_content": "flex-start"},
+                                             indent=False)
+
+        # Generic widgets:
+        # weighted obs check box
+        nnzgps = len(self.nonzero_groups)
+        self.weighted_obs_checkbox = ipyw.Checkbox(
+            value=False,
+            description="Weighted only",
+            disabled=False if nnzgps > 0 else True,
+            indent=False
+        )
+        # Radio button for selecting realisations of percentiles
+        self.reals_or_ptile_radio = ipyw.RadioButtons(
             options=[('Select reals.', 'r'), ("Select P.", 'p')],
             value='p',
             description='Plot type:',
             disabled=False,
         )
-
-        self.pslider = ipyw.FloatSlider(
+        # Slider through probability
+        self.prob_slider = ipyw.FloatSlider(
             value=50,
             min=0,
             max=100,
@@ -220,328 +487,49 @@ class VisHandler(object):
             readout=True,
             readout_format='.0f',
         )
-
-        self.tslider = ipyw.SelectionSlider(
-            options=[()],
-            # value=None,
-            continuous_update=False,
-            orientation='horizontal',
-            readout=True,
-            # readout_format='.0f',
-        )
-        self.set_slider_options(index_col=self.tidx)
-
-        self.iterselector = ipyw.Dropdown(
-            options=zip(*[sorted(self.real_dict.keys())]*2),
+        # Iteration and realisation selectors
+        self.iter_selector = ipyw.Dropdown(
+            options=zip(*[sorted(self.real_dict.keys())] * 2),
             # description="Iteration: ",
             value=sorted(self.real_dict.keys())[0],
-            layout = {'width': '100px',
-                      'margin': '0px 20px 0px 0px'}
+            layout={'width': '100px',
+                    'margin': '0px 20px 0px 0px'}
         )
-        self.realselector = ipyw.Dropdown(options=sorted(self.real_dict[self.iterselector.value].tolist(), key=_sort_key),
-                                          description="Realisation: ",
-                                          disabled=True,)
+        self.real_selector = ipyw.Dropdown(
+            options=sorted(self.real_dict[self.iter_selector.value].tolist(), key=_sort_key),
+            description="Realisation: ",
+            disabled=True, )
 
-        self.cmapselector = ipyw.Dropdown(
-            options=pc.named_colorscales(),
-            value='Plasma'.lower(),
-            description='Colorscale:',
-            layout={"justify_content": "flex-start"},
-            style={'description_width': 'initial'}
-        )
-        self.cmapreverse = ipyw.Checkbox(
-            value=False,
-            description="Reverse cmap",
-            disabled=False,
-            layout={"align_self": "flex-start",
-                    "justify_content": "flex-start"},
-            indent = False
-        )
+    def _set_widget_callbacks(self):
+        """ Setting up widget initial states and callbacks
+        """
+        # Ensemble selection callbacks
+        self.iter_selector.observe(self.set_ensemble, names=['value'])
+        self.reals_or_ptile_radio.observe(self.set_ensemble, names=['value'])
 
-        self.logselector = ipyw.Checkbox(value=False,
-                                         description="Logscale",
-                                         disabled=False,
-                                         layout={"align_self": "flex-start",
-                                                 "justify_content": "flex-start"},
-                                         indent=False
-                                         )
+        # Map widget callbacks
+        self.weighted_obs_checkbox.observe(self.set_mapsel_options, names=['value'])
+        self.map_obs_selector.observe(self.select_map_obs_gp, names=['value'])
+        self.layer_selector.observe(self.select_map_layer, names=['value'])
+        self.map_temporal_slider.observe(self.set_map, names=['value'])
+        self.map_log_check.observe(self.set_map, names=['value'])
+        self.prob_slider.observe(self.set_map, names=['value'])
+        self.real_selector.observe(self.set_map, names=['value'])
 
-        self.rpselector.observe(self.rpchange, names=['value'])
-
-        self.mapselector.observe(self.set_bounds_and_map, names=['value'])
-
-        self.pslider.observe(self.set_map, names=['value'])
-        self.layselector.observe(self.set_map, names=['value'])
-        self.iterselector.observe(self.set_map, names=['value'])
-        self.realselector.observe(self.set_map, names=['value'])
-        self.cmapselector.observe(self.set_map, names=['value'])
-        self.cmapreverse.observe(self.set_map, names=['value'])
-
-        self.logselector.observe(self.set_both, names=['value'])
-        self.tslider.observe(self.set_both, names=['value'])
-
-        self.wobselector.observe(self.set_mapselector, names=['value'])
-
-        # non mapable widgets
-        self.unmaphisto = None
-        self.unmapselector = None
-        self.unmapgroupselector = None
-        if len(self.unmapable) > 0:
-            self.get_unmap_widgets()
-
-        self.mapwidget, self.maphisto = self.get_plotly_mapfig() if self.geojson else (None,None)
+        # Map cbar mods -- needs more attention
+        self.vminmaxbutton.on_click(self._reset_vminmax)
+        self.cmap_selector.observe(self.set_map, names=['value'])
+        self.cmap_reverse.observe(self.set_map, names=['value'])
         self._reset_vminmax()
         self.vminmaxslider.observe(self.set_vminmax, names=['value'])
 
-    def set_vminmax(self, change=None):
-        """
-        Set the vmin and vmax values for the color scale based on the current map data values
-        """
-        print('Setting vmin and vmax')
-        self._uservminmax = True
-        self.set_map(change=change)
+        # Unmap widget callbacks
+        self.unmap_group_selector.observe(self.set_unmap_group, names=['value'])
+        self.unmap_selector.observe(self.set_unmap_level, names=['value'])
+        self.unmap_temporal_slider.observe(self.set_unmap, names=['value'])
+        self.unmap_log_check.observe(self.set_unmap, names=['value'])
 
-    def _reset_vminmax(self, change=None, mapfig=None):
-        """
-        Set the vmin and vmax values for the color scale based on the current map data values
-        """
-        if mapfig is None:
-            mapfig = self.mapwidget
-        self._uservminmax = False
-        vmin = mapfig.data[0].z.min()
-        vmax = mapfig.data[0].z.max()
-        with self.vminmaxslider.hold_trait_notifications():
-            self.vminmaxslider.min = vmin
-            self.vminmaxslider.max = vmax
-            self.vminmaxslider.step = (vmax - vmin) / 1000.0
-            self.vminmaxslider.value = [vmin, vmax]
-
-    def _build_obs_handlers(self):
-        obs = self.pst.observation_data
-        incols = obs.columns.intersection({'kper', 'kstp', 'k', 'i', 'j'})
-        obs = obs.astype({c:"Int32" for c in incols})
-        if self.mt is not None and self.tidx == 'time':
-            # need to get 'time' col
-            if 'time' not in obs.columns:
-                obs['time'] = np.nan
-            # this will need generalising
-            if 'kper' in obs.columns:
-                if 'kstp' not in obs.columns:
-                    obs['time'] = obs.apply(
-                        lambda x: self.mt.get_elapsed_time(x.kper if not pd.isna(x.kper) else 0, None)
-                        if pd.isna(x.time) else x.time, axis=1
-                    ).astype(float)
-                else:
-                    obs['time'] = obs.apply(
-                        lambda x: self.mt.get_elapsed_time(x.kper if not pd.isna(x.kper) else 0, x.kstp) if pd.isna(
-                            x.time) else x.time, axis=1).astype(float)
-
-        self.pst.observation_data = obs
-        ens = self.pst.ies.obsen.T
-        if 'iteration' not in ens.columns.names:
-            ens = pd.concat({0: ens}, axis=1, names=['iteration'])
-        # handy lookup for realizations for each iteration
-        self.real_dict = ens.columns.to_frame(False).groupby('iteration').realization.unique().to_dict()
-        try:
-            noise = self.pst.ies.noise.T
-        except Exception:
-            noise = None
-        for gp, obdf in obs.groupby(self.groupby):
-            gph = VisGroupHandler(obdf, mg=self.mg, ens=ens, tidx=self.tidx)
-            if gph.mapable == 'grid':
-                self.gridmapable.append(gp)
-            elif gph.mapable == 'point':
-                self.pointmapable.append(gp)
-            else:
-                self.unmapable.append(gp)
-            if any(obdf.weight != 0):
-                wobs = obdf.loc[obdf.weight != 0]
-                # todo: catch and forgive absent noise ensembles
-                if noise is not None and len(wobs.index.intersection(noise.index)) > 0:
-                    self.obsval_dict[gp] = noise.loc[wobs.index, :]
-                else:
-                    self.obsval_dict[gp] = pd.DataFrame(index=wobs.index, data=wobs.obsval.values)
-            self.obs_dict[gp] = gph
-        pass
-
-    def _get_tidx(self):
-        t = self.tslider.options[self.tslider.index]
-        if len(t) > 1:
-            return t[0]
-        return t
-
-    def get_unmap_widgets(self):
-        ig = self.unmapable[0]
-        unmapgsel = ipyw.Dropdown(options=self.unmapable,
-                                  description="Non-mappable groups: ",
-                                  value=ig,
-                                  style={'description_width': 'initial'})
-        gph = self.obs_dict[ig]
-        t = self._get_tidx()
-        opts = gph.ens.index.to_frame()
-        opts = opts.loc[opts[self.tidx] == t].index.unique(level=0)
-        unmapsel = ipyw.Dropdown(options=opts,
-                                 description="Non-mappable obs: ",
-                                 value=opts[0],
-                                 style={'description_width': 'initial'})
-        seldf = gph.ens.loc[(opts[0], [t]), :]
-        if len(seldf) > 1:
-            warnings.warn("output and tidx match more than one output",
-                          UserWarning)
-        seldf = seldf.iloc[0]
-
-        unmaphisto = go.Figure([go.Histogram(x=seldf.loc[(i, slice(None))].values,
-                                                   histnorm='probability density',
-                                                   name=f"iter_{i}",
-                                                   opacity=0.75) for i in
-                                      sorted(self.real_dict.keys())],
-                                     layout=dict(barmode='overlay',
-                                                 height=400,
-                                                 width=600,
-                                                 margin=dict(t=10, b=10, l=10, r=10),
-                                                 yaxis2=dict(overlaying="y", range=[0,1], visible=False)))
-        unmaphisto.data[0].update(marker_color='rgba(112,112,112,0.75)')
-        unmaphisto.data[-1].update(marker_color='rgba(20,49,220,0.75)')
-        unmaphisto.add_trace(go.Histogram(
-            marker_color='rgba(0,0,0,0)',  # Transparent fill
-            marker_line_color='red',  # Outline color
-            marker_line_width=1,
-            opacity=0.75,
-            name=f"obs+noise",
-            histnorm='probability density',
-        ))
-        unmaphisto.add_trace(go.Scatter(
-            x=[None]*50, y=np.linspace(0,1,50),
-            line=dict(color='red', width=2, dash='dash'),
-            opacity=0.75,
-            name='obsval',
-            yaxis='y2',
-            showlegend=False,
-            hovertemplate="obsval: %{x}<extra></extra>",
-            visible=False
-        ))
-
-        unmaphisto = go.FigureWidget(unmaphisto)
-
-
-        unmapgsel.observe(self.unmapgchange, names=['value'])
-        unmapsel.observe(self.unmapchange, names=['value'])
-
-        self.unmaphisto = unmaphisto
-        self.unmapgroupselector = unmapgsel
-        self.unmapselector = unmapsel
-
-    def set_mapselector(self, change=None):
-        with self.callback_off():
-            cv = self.mapselector.value
-            if self.wobselector.value:
-                gridw = self.obsval_dict.keys() & self.gridmapable
-                if len(gridw) > 0:
-                    self.mapselector.options = sorted(gridw)
-                else:
-                    self.wobselector.value = False
-                    self.wobselector.disabled = True
-            else:
-                self.mapselector.options = self.gridmapable
-            if cv in self.mapselector.options:
-                self.mapselector.value = cv
-            else:
-                self.mapselector.value = self.mapselector.options[0]
-        self.set_map(change)
-
-    def set_layselector(self, gp):
-        # get current layer selector value
-        k = self.layselector.value
-        # get group handler for selected group
-        gph = self.obs_dict[gp]
-        kopt = sorted(gph.metadf.k.unique().tolist())
-        if k is None or k not in kopt:
-            self.layselector.options = kopt
-            self.layselector.value = kopt[0]
-        else:
-            self.layselector.options = kopt
-            self.layselector.value = k
-        return self.layselector.value
-
-    def set_bounds_and_map(self, change=None):
-        self._uservminmax = False
-        self.set_map(change=change)
-
-    def set_map(self, change=None, mapfig=None):
-        if self._callback_off:
-            # if we are in a callback, don't do anything
-            return
-        # will be used in callback so need to handle change arg
-        if mapfig is None:
-            mapfig = self.mapwidget
-        gp = self.mapselector.value
-        gph = self.obs_dict[gp]
-        i = self.iterselector.value
-        with self.callback_off():
-            self.set_layselector(gp)
-        k = self.layselector.value
-        t = self._get_tidx()
-        self.realselector.options = sorted(self.real_dict[i].tolist(), key=_sort_key)
-        r = self.realselector.value
-        p = self.pslider.value
-        log = self.logselector.value
-        cmap = self.cmapselector.value
-        cr = self.cmapreverse.value
-        if self.rpselector.value == 'r':
-            seldf = gph.ens.loc[(slice(None), k, t), (i, r)]
-        else:
-            seldf = gph.qtiles.loc[(slice(None), k, t), (i, f"P{int(p)}")]
-        if cr:
-            cmap += '_r'
-        if self.wobselector.value:
-            obscells = gph.idxmap.loc[self.obsval_dict[gp].index].cellid.values
-            seldf = seldf.loc[(obscells, k, slice(None))]
-        z = seldf.values
-        # print(seldf)
-        if log:
-            z = np.log10(z)
-
-        if self._uservminmax:
-            zmin, zmax = self.vminmaxslider.value
-            zmin = np.max([zmin, z.min()])
-            zmax = np.min([zmax, z.max()])
-        else:
-            zmin, zmax = [None, None]
-        print("vminvmax: ", zmin, zmax)
-        with mapfig.batch_update():
-            mapfig.update_traces(
-                z=z,
-                zmin=zmin,
-                zmax=zmax,
-                zauto=True if zmin is None or zmax is None else False,
-                locations=seldf.index.get_level_values('cellid'),
-                colorscale=cmap,
-                customdata=seldf.values,
-                selector=dict(name='cpmap')
-            )
-        if not self._uservminmax:
-            with self.callback_off():
-                self._reset_vminmax(mapfig=mapfig)
-        self.highlight_cell(mapfig)
-        if change is not None:
-            if change['owner'] == self.realselector or change['owner'] == self.pslider:
-                print("Only updating guide line")
-                self.update_maphisto_line()
-            else:
-                print("Updating histogram")
-                self.update_maphisto()
-
-    def set_both(self, *args):
-        """
-        Set both map and histogram widgets.
-        This is a convenience method to update both widgets at once.
-        """
-        self.set_map(*args)
-        if len(self.unmapable) > 0:
-            self.unmapchange()
-
-
-    def get_plotly_mapfig(self):
+    def _get_plotly_mapfig(self):
         json = self.geojson
         centroids = []
         for feature in json['features']:
@@ -560,21 +548,28 @@ class VisHandler(object):
                            # width=720,
                            margin=dict(t=0, b=0, l=0, r=0),
                            autosize=True)
-        cpmap = go.Choroplethmap(geojson=json,  # json with cell edges
-                                locations=[0] * len(json['features']),
-                                z=[0] * len(json['features']),
-                                colorscale="plasma",
-                                showscale=True,
-                                marker_line_width=0.5,
-                                marker_line_color='gainsboro',
-                                marker_opacity=0.8,
-                                customdata=[0] * len(json['features']),
-                                hovertemplate='<b>%{location}</b><br>' +
-                                              '%{customdata}<br>' +  # Only show custom data
-                                              '<extra></extra>',
-                                name='cpmap')
+        cpmap = go.Choroplethmap(
+            # geojson=json,  # json with cell edges
+            # locations=[0] * len(json['features']),
+            # z=[0] * len(json['features']),
+            # customdata=[0] * len(json['features']),
+            geojson=None,  # json with cell edges
+            locations=[],
+            z=[],
+            customdata=[],
+            colorscale="plasma",
+            showscale=True,
+            marker_line_width=0.5,
+            marker_line_color='gainsboro',
+            marker_opacity=0.8,
+            hovertemplate='<b>%{location}</b><br>' +
+                          '%{customdata}<br>' +  # Only show custom data
+                          '<extra></extra>',
+            name='cpmap'
+        )
+        # TODO: add scatter widget for point mappables!!
         fig = go.Figure(cpmap, layout=layout)
-        self.set_map(mapfig=fig)
+        # self.set_map(mapfig=fig)
         fig = go.FigureWidget(fig)
         fig.data[0].on_click(self.on_map_click)
 
@@ -616,18 +611,481 @@ class VisHandler(object):
         histo = go.FigureWidget(histo)
         return fig, histo
 
+    # Callbacks
+    @contextmanager
+    def callback_off(self):
+        self._callback_off_count += 1
+        self._callback_off = True
+        try:
+            yield
+        finally:
+            self._callback_off_count -= 1
+            if self._callback_off_count == 0:
+                self._callback_off = False
+
+    # weighted_obs_checkbox callback at top of map obs selection chain
+    def set_mapsel_options(self, change=None):
+        """
+        Call back function triggered by weighted_obs_checkbox changes.
+        Updates of map_obs_selector options and triggers downstream updates of:
+        select_map_obs_gp() -> callback for map_obs_selector changes
+          _tmp_map_gph -> group handler for current group selection
+          _set_laysel_options(self)
+            layer_selector.options -> current layer options for mapping
+            select_map_layer()
+              _tmp_map_kidxmap -> index/name map for current mapping layer (including time)
+              _set_slider_options()
+              set_map()
+                if _tmp_map_ens is None:
+                    set_ensemble()
+                      _tmp_map_ens -> current iteration ensemble for mapping
+                      real_selector.options -> current realisation options iteration
+                _tmp_map_idxmap() -> index/name map for current mapping layer and time
+                _set_sel_name()
+                  _sel_name -> current selected (obs) name (may be None)
+                highlight_cell() [maybe set _sel_cellid = None]
+                update_maphisto_line()
+                  or
+                update_maphisto()
+                  _histomod()
+                  update_maphisto_line()
+        Parameters
+        ----------
+        change
+
+        Returns
+        -------
+
+        """
+        if self._callback_off:
+            return
+        # called when weighted obs checkbox change
+        with self.callback_off():  # don't want to trigger all the callbacks?
+            # current map_obs_selector value
+            cv = self.map_obs_selector.value
+            if self.weighted_obs_checkbox.value:
+                # get weighted groups that are gridmapable
+                gridw = set(self.nonzero_groups) & set(self.gridmapable)
+                if len(gridw) > 0:
+                    # update options to only weighted
+                    self.map_obs_selector.options = sorted(gridw)
+                    self.weighted_obs_checkbox.disabled = False
+                else:
+                    # if none then reset and disable checkbox
+                    self.weighted_obs_checkbox.value = False
+                    self.weighted_obs_checkbox.disabled = True
+            else:
+                # reset to all gridmapable
+                self.map_obs_selector.options = self.gridmapable
+            # fix value to current if possible
+        if cv in self.map_obs_selector.options:
+            self.map_obs_selector.value = cv
+            # no propagation should be needed -- or should it?
+            self.select_map_obs_gp(change=change)
+        else:
+            self.map_obs_selector.value = self.map_obs_selector.options[0]
+            # propagate change
+            # self.select_map_obs_gp(change=change)
+            # self.set_map(change)
+
+    # map_obs_selector callback
+    def select_map_obs_gp(self, change=None):
+        """
+        Call back function triggered by map_obs_selector changes.
+        Updates:
+        _tmp_map_gph -> group handler for current group selection
+        Triggers downstream:
+        _set_laysel_options(self)
+          layer_selector.options -> current layer options for mapping
+          select_map_layer()
+            _tmp_map_kidxmap -> index/name map for current mapping layer (including time)
+            _set_slider_options()
+            set_map()
+              if _tmp_map_ens is None:
+                set_ensemble()
+                  _tmp_map_ens -> current iteration ensemble for mapping
+                  real_selector.options -> current realisation options iteration
+              _tmp_map_idxmap() -> index/name map for current mapping layer and time
+              _set_sel_name()
+              _sel_name -> current selected (obs) name (may be None)
+              highlight_cell() [maybe set _sel_cellid = None]
+              update_maphisto_line()
+                or
+              update_maphisto()
+                _histomod()
+                update_maphisto_line()
+        Parameters
+        ----------
+        change
+
+        Returns
+        -------
+
+        """
+        if self._callback_off:
+            # if we are in a callback, don't do anything
+            return
+        # called when map_obs_selector value changes
+        # update group handler loaded for mapping
+        self._tmp_map_gph = self.obs_gphandlers[self.map_obs_selector.value]
+        self.set_ensemble(propagate=False)
+        # TODO: check vminvmax defaults
+        self._uservminmax = False
+        # propagate through to layer selection options
+        self._set_laysel_options(change=change)
+        # this will propagate to layer seleciton
+        # and finally to tslider definition...
+
+        # self.set_map(change=change)
+
+    # map_obs_selector internal callback
+    def _set_laysel_options(self, change=None):
+        """
+        Internal callback to set layer selector options based on
+        current group handler and weighted obs checkbox status.
+        Updates:
+        layer_selector.options -> current layer options for mapping
+        Triggers downstream:
+        select_map_layer()
+          _tmp_map_kidxmap -> index/name map for current mapping layer (including time)
+          _set_slider_options()
+          set_map()
+            if _tmp_map_ens is None:
+              set_ensemble()
+                _tmp_map_ens -> current iteration ensemble for mapping
+                real_selector.options -> current realisation options iteration
+            _tmp_map_idxmap() -> index/name map for current mapping layer and time
+            _set_sel_name()
+              _sel_name -> current selected (obs) name (may be None)
+            highlight_cell() [maybe set _sel_cellid = None]
+            update_maphisto_line()
+              or
+            update_maphisto()
+              _histomod()
+              update_maphisto_line()
+
+        Returns
+        -------
+
+        """
+        # called downstream when map obs group changes
+        # get current layer selector value
+        o_k = self.layer_selector.value
+        # get group handler for selected group
+        gph = self._tmp_map_gph # is is already set on obs gp change
+        lookup = gph.group_info
+        # expecting layer index level -2
+        if self.weighted_obs_checkbox.value:
+            # filter to weighted only
+            lookup = lookup[lookup.weight != 0]
+        kopt = sorted(lookup.index.unique(-2))
+        # update options and values
+        # WILL TRIGGER LAYER SELECTOR CALLBACK if ok changes
+        if o_k is None or o_k not in kopt:
+            self.layer_selector.options = kopt
+            self.layer_selector.value = kopt[0]
+        else:
+            self.layer_selector.options = kopt
+            self.layer_selector.value = o_k
+            self.select_map_layer(change=change)
+
+    # layer_selector callback
+    def select_map_layer(self, change=None):
+        """
+        Call back function triggered by layer_selector changes.
+        Updates:
+        _tmp_map_kidxmap -> index/name map for current mapping layer (including time)
+        Triggers downstream:
+        _set_slider_options()
+        set_map()
+          if _tmp_map_ens is None:
+            set_ensemble()
+              _tmp_map_ens -> current iteration ensemble for mapping
+              real_selector.options -> current realisation options iteration
+          _tmp_map_idxmap() -> index/name map for current mapping layer and time
+          _set_sel_name()
+            _sel_name -> current selected (obs) name (may be None)
+          highlight_cell() [maybe set _sel_cellid = None]
+          update_maphisto_line()
+            or
+          update_maphisto()
+          _histomod()
+          update_maphisto_line()
+
+        Parameters
+        ----------
+        change
+
+        Returns
+        -------
+
+        """
+        # called when layer selector changes
+        kdf = self._tmp_map_gph.group_info.xs(self.layer_selector.value,
+                                              level=-2)
+        if self.weighted_obs_checkbox.value:
+            # filter to weighted only
+            kdf = kdf[kdf.weight != 0]
+        # DEFINE INDEX MAP FOR SELECTED LAYER
+        # -- this is ths key attribute for slicing at runtime
+        self._tmp_map_kidxmap = kdf.ensmap
+        # propagate through to temporal slider
+        with self.callback_off():
+            self._set_slider_options(self.map_temporal_slider,
+                                     self._tmp_map_kidxmap)
+        # this now?
+        self.set_map(change=change)
+
+    # layer_selector internal callback
+    def _set_slider_options(self, slider=None, idxmap=None,
+                            description="Time:"):
+        if slider is None:
+            slider = self.map_temporal_slider
+        if idxmap is None:
+            idxmap = self._tmp_map_kidxmap
+        t = self._get_tidx(slider)
+        options = idxmap.index.unique(self.tidx).tolist()
+        isnone = True
+        try:
+            options.remove('none')
+        except ValueError:
+            isnone = False
+        options = sorted(options)
+        if isnone:
+            options = ['none'] + options
+
+        if len(options) < 2:
+            slider.disabled = True
+        else:
+            slider.disabled = False
+        val = options.index(t) if t in options else 0
+        options = [(t, i) for i, t in enumerate(options)]
+        slider.options = options
+        slider.value = val
+        slider.description = description
+
+    def set_ensemble(self, change=None, propagate=True):
+        i = self.iter_selector.value
+        # PRELOADING ENSEMBLE AT ITERATION
+        if self.reals_or_ptile_radio.value == 'r':
+            ens = self._tmp_map_gph.ens.xs(i, level=0, axis=1)
+            self.real_selector.disabled = False
+            self.prob_slider.disabled = True
+        else:
+            ens = self._tmp_map_gph.qtiles.xs(i, level=0, axis=1)
+            self.real_selector.disabled = True
+            self.prob_slider.disabled = False
+        # realisation or quantile ensemble at selected iteration
+        self._tmp_map_ens = ens
+
+        with self.callback_off():
+            # self._set_slider_options(self.map_temporal_slider)
+            self.real_selector.options = sorted(self.real_dict[i].tolist(), key=_sort_key)
+
+        if propagate:
+            self.set_map(change=change)
+
+    def set_map(self, change=None, mapfig=None):
+        """
+        Call back function to set map data onto map widget based on current selections.
+        Calls downstream:
+        if _tmp_map_ens is None:
+          set_ensemble()
+            _tmp_map_ens -> current iteration ensemble for mapping
+            real_selector.options -> current realisation options iteration
+        _tmp_map_idxmap() -> index/name map for current mapping layer and time
+        _set_sel_name()
+          _sel_name -> current selected (obs) name (may be None)
+        highlight_cell() [maybe set _sel_cellid = None]
+        update_maphisto_line()
+          or
+        update_maphisto()
+          _histomod()
+          update_maphisto_line()
+
+        Parameters
+        ----------
+        change
+        mapfig
+
+        Returns
+        -------
+
+        """
+        if self._callback_off:
+            # if we are in a callback, don't do anything
+            return
+        # will be used in callback so need to handle change arg
+        print("Setting map...")
+        if mapfig is None:
+            mapfig = self.map_widget
+        if mapfig is None:
+            return
+        # get group handler for selected group from outputs dict
+        # (these contain ensembles etc)
+        gph = self._tmp_map_gph  # is is already set on obs gp change
+        assert gph.name == self.map_obs_selector.value, \
+            "miss match between cached group and map obs sel"
+        # todo: this should trigger select_map_obs_gp?
+        # ensemble should already be set on iter/rp radio change
+        if self._tmp_map_ens is None:
+            self.set_ensemble(change=change, propagate=False)
+
+        ens = self._tmp_map_ens
+        # cellids for obs
+        idxmap = self._tmp_map_kidxmap # is is already set on layer sel
+        t = self._get_tidx(self.map_temporal_slider)
+        k = self.layer_selector.value
+
+        if self.reals_or_ptile_radio.value == 'r':
+            c = self.real_selector.value
+        else:
+            c = int(self.prob_slider.value)
+
+        # get current selected iteration
+        cmap = self.cmap_selector.value
+        cr = self.cmap_reverse.value
+        try:
+            idxmap = idxmap.xs(t, level=-1)
+        except KeyError:
+            print(f"no index map for group '{gph.name}' @ k:{k}, t:{t}")
+            idxmap = pd.Series([])
+        self._tmp_map_idxmap = idxmap
+        self._set_sel_name()
+        try:
+            seldf = ens.loc[idxmap.values, c]
+            z = seldf.values
+            locs = idxmap.index
+        except KeyError:
+            z = np.array([])
+            locs = np.array([])
+        if len(z) == 0:
+            print(f"no map data for group '{gph.name}' @ k:{k}, t:{t}")
+        # handle log scale
+        if self.map_log_check.value:
+            with np.errstate(divide='ignore'):
+                z = np.log10(z)
+        if cr:
+            cmap += '_r'
+
+        if self._uservminmax and len(z) > 0:
+            zmin, zmax = self.vminmaxslider.value
+            zmin = np.max([zmin, z.min()])
+            zmax = np.min([zmax, z.max()])
+        else:
+            zmin, zmax = [None, None]
+        print("vminvmax: ", zmin, zmax)
+
+        with mapfig.batch_update():
+            mapfig.update_traces(
+                geojson=self.geojson,
+                z=z,
+                zmin=zmin,
+                zmax=zmax,
+                zauto=True if zmin is None or zmax is None else False,
+                locations=locs,
+                colorscale=cmap,
+                customdata=z,
+                selector=dict(name='cpmap')
+            )
+        if not self._uservminmax:
+            with self.callback_off():
+                self._reset_vminmax(mapfig=mapfig)
+        self.highlight_cell(mapfig)
+        if change is not None:
+            if change['owner'] == self.real_selector or change['owner'] == self.prob_slider:
+                print("Only updating guide line")
+                self.update_maphisto_line()
+            else:
+                print("Updating histogram")
+                self.update_maphisto()
+
+
+    def set_vminmax(self, change=None):
+        """
+        Set the vmin and vmax values for the color scale based on the current map data values
+        """
+        print('Setting vmin and vmax')
+        self._uservminmax = True
+        self.set_map(change=change)
+
+    def _reset_vminmax(self, change=None, mapfig=None):
+        """
+        Set the vmin and vmax values for the color scale based on the current map data values
+        """
+        if mapfig is None:
+            mapfig = self.map_widget
+        if mapfig is None:
+            return
+        z = mapfig.data[0].z
+        if len(z) == 0:
+            return
+        self._uservminmax = False
+        vmin = z.min()
+        vmax = z.max()
+        with self.vminmaxslider.hold_trait_notifications():
+            self.vminmaxslider.min = vmin
+            self.vminmaxslider.max = vmax
+            self.vminmaxslider.step = (vmax - vmin) / 1000.0
+            self.vminmaxslider.value = [vmin, vmax]
+
+    def _get_tidx(self, slider):
+        t = slider.options[slider.index]
+        if not isinstance(t, str) and len(t) > 1:
+            t = t[0]
+        return t
+
+    def _get_plotly_unmapfig(self):
+        unmaphisto = go.Figure(
+            [go.Histogram(x=[],
+                          histnorm='probability density',
+                          name=f"iter_{i}",
+                          opacity=0.75)
+             for i in sorted(self.real_dict.keys())],
+            layout=dict(barmode='overlay',
+                        height=400, width=600,
+                        margin=dict(t=10, b=10, l=10, r=10),
+                        yaxis2=dict(overlaying="y", range=[0,1], visible=False))
+        )
+        # maker first and last histo grey and blue
+        unmaphisto.data[0].update(marker_color='rgba(112,112,112,0.75)')
+        unmaphisto.data[-1].update(marker_color='rgba(20,49,220,0.75)')
+        # add noise histo
+        unmaphisto.add_trace(go.Histogram(
+            marker_color='rgba(0,0,0,0)',  # Transparent fill
+            marker_line_color='red',  # Outline color
+            marker_line_width=0.7,
+            opacity=0.75,
+            name=f"obs+noise",
+            histnorm='probability density',
+        ))
+        # add vline for obsval
+        unmaphisto.add_trace(go.Scatter(
+            x=[None]*50, y=np.linspace(0,1,50),
+            line=dict(color='red', width=2, dash='dash'),
+            opacity=0.75,
+            name='obsval',
+            yaxis='y2',
+            showlegend=False,
+            hovertemplate="obsval: %{x}<extra></extra>",
+            visible=False
+        ))
+        # make into widget
+        unmaphisto = go.FigureWidget(unmaphisto)
+        return unmaphisto
+
     def on_map_click(self, *clickdata):
         trace, p, s = clickdata
         # print(t.locations)
         # get group handler for selected group
         idx = p.point_inds[0]
-        print("map index value: ",idx)
+        print("map index value: ", idx)
         cellid = trace.locations[idx]
-        self._cell_sel_id = cellid
+        self._sel_cellid = cellid
         self.highlight_cell()
-        with self.maphisto.batch_update():
+        self._set_sel_name()
+        with self.map_histogram.batch_update():
             self.update_maphisto()
-
 
     def highlight_cell(self, mapfig=None):
         """
@@ -639,150 +1097,182 @@ class VisHandler(object):
             The ID of the cell to highlight.
         """
         if mapfig is None:
-            mapfig = self.mapwidget
-        cellid = self._cell_sel_id
+            mapfig = self.map_widget
+        cellid = self._sel_cellid
         print("selected cellid :", cellid)
+        trace = mapfig.data[0]
+        # base line styles -- Create arrays for line styling
+        line_widths = [0.5] * len(trace.locations)
+        line_colors = ['gainsboro'] * len(trace.locations)
         with mapfig.batch_update():
-            trace = mapfig.data[0]
-            # Reset all line widths
-            # trace.marker.line.width = 0.5
-            # trace.marker.line.color = 'gainsboro'
-            line_widths = [0.5] * len(trace.locations)
-            line_colors = ['gainsboro'] * len(trace.locations)
             if cellid is not None and cellid in trace.locations:
-                # Create arrays for line styling
                 idx = list(trace.locations).index(cellid)
-
                 # Highlight selected cell
                 print("Highlighting cell:", cellid, "at index", idx)
                 line_widths[idx] = 2
                 line_colors[idx] = 'white'
-
             else:
                 print("No cell selected or cellid not in map data.")
-                self._cell_sel_id = None
-            trace.marker.line.width = line_widths
-            trace.marker.line.color = line_colors
+                self._sel_cellid = None
+            trace.update(marker_line_width=line_widths)
+            trace.update(marker_line_color=line_colors)
 
-    def _histomod(self, histowgt, df, gp):
-        gph = self.obs_dict[gp]
-        if self.logselector.value:
+    def _set_sel_name(self):
+        if self._sel_cellid is None:
+            self._sel_name = None
+        else:
+            try:
+                idx = self._tmp_map_idxmap.xs(self._sel_cellid)
+            except KeyError as err:
+                # TODO better handling of missed cellid
+                print(f"Cell '{self._sel_cellid}' not found in cached index map for group '{self._tmp_map_gph.name}'")
+                idx = None
+            self._sel_name = idx
+
+    def _histomod(self, histowgt, df, gp, log=False):
+        if df is None:
+            histowgt.update_traces(x=[])
+            return
+        if log:
             df = np.log10(df)
         for i, dfi in df.groupby('iteration'):
             # print(df)
             histowgt.update_traces(x=dfi.values, selector=dict(name=f"iter_{i}"))
-        if gp in self.obsval_dict.keys():
-            obsplus = self.obsval_dict[gp]
-            obsidx = obsplus.index.intersection(gph.idxmap_r.loc[df.name])
-            if len(obsidx) > 0:
-                obsplus = obsplus.loc[
-                    obsidx].values.flatten()  # todo this will need to change if more than one obs per cell
-                if self.logselector.value:
-                    obsplus = np.log10(obsplus)
-                if len(np.unique(obsplus)) > 1:
-                    # only update if there is more than one unique value
-                    histowgt.update_traces(x=obsplus,
-                                           selector=dict(name=f"obs+noise"))
-                    histowgt.update_traces(x=[None]*50, visible=False,
-                                           selector=dict(name=f"obsval"))
 
-                else:
-                    # no obs+noise for this group
-                    print("unique obs+noise value for ", df.name, ":", obsplus)
-                    histowgt.update_traces(x=[], selector=dict(name=f"obs+noise"))
-                    histowgt.update_traces(x=[obsplus[0]]*50, visible=True,
-                                           selector=dict(name=f"obsval"))
-            else:
-                histowgt.update_traces(x=[], selector=dict(name=f"obs+noise"))
-                histowgt.update_traces(x=[None]*50, visible=False,
-                                       selector=dict(name=f"obsval"))
-
-        else:
+        gph = self.obs_gphandlers[gp]
+        obsplus = gph.obsplus
+        obsidx = df.name
+        # if no obsplus or obsidx not in obsplus index, clear obs+noise trace
+        if gph.obsplus is None or obsidx not in gph.obsplus.index:
             # no obs+noise for this group
             histowgt.update_traces(x=[], selector=dict(name=f"obs+noise"))
             histowgt.update_traces(x=[None]*50, visible=False,
                                    selector=dict(name=f"obsval"))
+            return
 
+        obsplus = obsplus.loc[obsidx].values.flatten()  # todo this will need to change if more than one obs per cell
+        if log:
+            obsplus = np.log10(obsplus)
+        if len(np.unique(obsplus)) > 1:
+            # only update if there is more than one unique value
+            histowgt.update_traces(x=obsplus,
+                                   selector=dict(name=f"obs+noise"))
+            histowgt.update_traces(x=[None]*50, visible=False,
+                                   selector=dict(name=f"obsval"))
+
+        else:
+            # no obs+noise for this group
+            print("unique obs+noise value for ", df.name, ":", obsplus[0])
+            histowgt.update_traces(x=[], selector=dict(name=f"obs+noise"))
+            histowgt.update_traces(x=[obsplus[0]]*50, visible=True,
+                                   selector=dict(name=f"obsval"))
 
     def update_maphisto(self):
-        cellid = self._cell_sel_id
-        gp = self.mapselector.value
-        gph = self.obs_dict[gp]
-        if cellid is None or cellid not in gph.ens.index.get_level_values(0):
-            self.maphisto.update_traces(x=[])
-        else:
-            t = self._get_tidx()
-            k = self.layselector.value
-            # extract the data for the selected cell and tidx
-            # -- this has to be a Series
-            dff = gph.ens.loc[(cellid, k, [t]), :]
-            if len(dff) > 1:
-                warnings.warn("Cellid and tidx match more than one output",
-                              UserWarning)
-            dff = dff.iloc[0]
-            self._histomod(self.maphisto, dff, gp)
+        # cellid = self._sel_cellid
+        idx = self._sel_name
+        # gp = self.map_obs_selector.value
+        gph = self._tmp_map_gph
+        gp = gph.name
+        if np.ndim(idx) > 1 and len(idx) > 1:
+            warnings.warn("Cellid and tidx match more than one output",
+                          UserWarning)
+            idx = idx.iloc[0]
+        try:
+            self._sel_ensdf = self._tmp_map_gph.ens.xs(idx)
+        except KeyError as err:
+            # TODO better handling of missed idx (obsnme)
+            print(f"'{idx}' not found in cached ensemble for group '{gp}'")
+            self.map_histogram.update_traces(x=[])
+            return
+        self._histomod(self.map_histogram, self._sel_ensdf, gp,
+                       log=self.map_log_check.value)
         self.update_maphisto_line()
 
     def update_maphisto_line(self):
-        cellid = self._cell_sel_id
-        rp = self.rpselector.value
-        t = self._get_tidx()
-        k = self.layselector.value
-        i = self.iterselector.value
+        # cellid = self._sel_cellid
+        idx = self._sel_name
+        if idx is None:
+            self.map_histogram.update_traces(x=[] * 50, selector=dict(name=f"mapval"))
+            return
+        rp = self.reals_or_ptile_radio.value
         if rp == 'r':
-            v = self.realselector.value
-            data = self.obs_dict[self.mapselector.value].ens
-            csel = (i, v)
+            v = self.real_selector.value
         else:
-            v = self.pslider.value
-            data = self.obs_dict[self.mapselector.value].qtiles
-            csel = (i, f"P{int(v)}")
-        if cellid is None or cellid not in data.index.get_level_values(0):
-            dff = None
-        else:
-            dff = data.loc[(cellid, k, [t]), csel].values[0]
-        if self.logselector.value and dff is not None:
-            dff = np.log10(dff)
-        print("Prob/Real value: ",dff)
+            v = int(self.prob_slider.value)
+        data = self._tmp_map_ens.loc[idx, v]
+        if self.map_log_check.value and data is not None:
+            data = np.log10(data)
+        print("Prob/Real value: ", data)
         # Update the vertical line in the histogram
-        with self.maphisto.batch_update():
+        with self.map_histogram.batch_update():
             # Remove any existing vertical line
-            self.maphisto.update_traces(x=[dff]*50, selector=dict(name=f"mapval"))
+            self.map_histogram.update_traces(x=[data] * 50, selector=dict(name=f"mapval"))
 
+    def set_unmap_group(self, change=None):
+        """
+        Call back function triggered by unmap_group_selector changes.
+        Propagates downstream to set_unmap_options()
+        Parameters
+        ----------
+        change
 
-    def rpchange(self, change):
-        if change.new == 'r':
-            self.realselector.disabled = False
-            self.pslider.disabled = True
-        else:
-            self.realselector.disabled = True
-            self.pslider.disabled = False
-        self.set_map(change)
+        Returns
+        -------
 
-    def unmapgchange(self, change):
-        gsel = self.unmapgroupselector.value
-        osel = self.unmapselector.value
-        opts = self.obs_dict[gsel].ens.index.to_frame()
-        t = self._get_tidx()
+        """
+        if self._callback_off:
+            # if we are in a callback, don't do anything
+            return
+        # if group selector changes, need to update obs selector options
+        # dependent on the selected time (this can get circular!)
+        # so we will roll time last up (same as with map)
+        print("Setting unmap options...")
+        gsel = self.unmap_group_selector.value
+        gph = self.obs_gphandlers[gsel]
+        # set tmp attibutes for quick lookup later
+        self._tmp_unmap_gph = gph
+        self._tmp_unmap_gidxmap = gph.group_info.ensmap
+        # get current unmap selector value
+        osel = self.unmap_selector.value
+        opts = self._tmp_unmap_gidxmap.index.unique(0)
         # todo time may or may not be part of this...?
-        self.unmapselector.options=opts.loc[opts[self.tidx]==t].index.unique(level=0)
-        # if unmapselector.value is changed by the above unmapchange will already have been triggered
-        # catch the instance where the value is not changed
-        if osel == self.unmapselector.value:
-            self.unmapchange()
+        self.unmap_selector.options=opts
+        if osel in self.unmap_selector.options:
+            self.unmap_selector.value = osel
+        else:
+            self.unmap_selector.value = self.unmap_selector.options[0]
+        if osel == self.unmap_selector.value:
+            self.set_unmap_level()
 
-    def unmapchange(self, change=None):
-        gsel = self.unmapgroupselector.value
-        v = self.unmapselector.value
-        t = self._get_tidx()  # todo time may or may not be part of this...?
-        gph = self.obs_dict[gsel]
-        seldf = gph.ens.loc[(v, [t]), :]
-        if len(seldf) > 1:
-            warnings.warn("output and tidx match more than one output",
-                          UserWarning)
-        seldf = seldf.iloc[0]
-        with self.unmaphisto.batch_update():
-            self._histomod(self.unmaphisto, seldf, gsel)
+    def set_unmap_level(self, change=None):
+        ens = self._tmp_unmap_gph.ens
+        l2 = self.unmap_selector.value
+        idx = self._tmp_unmap_gidxmap.xs(l2, level=0)
+        self._tmp_unmap_idxmap = idx
+        ens = ens.loc[idx.values, :]
+        self._tmp_unmap_ens = ens
+        with self.callback_off():
+            self._set_slider_options(self.unmap_temporal_slider,
+                                     self._tmp_unmap_gidxmap)
+        self.set_unmap(change=change)
+
+    def set_unmap(self, change=None):
+        if self._callback_off:
+            # if we are in a callback, don't do anything
+            return
+        # if unmap observation changed need to update histogram
+        print("Setting unmap...")
+        gsel = self._tmp_unmap_gph.name
+        t = self._get_tidx(self.unmap_temporal_slider)  # todo time may or may not be part of this...?
+        ens = self._tmp_unmap_ens
+        idx = self._tmp_unmap_idxmap.xs(t)
+        try:
+            seldf = ens.xs(idx)
+        except KeyError:
+            seldf = pd.Series([])
+        with self.unmap_histogram.batch_update():
+            self._histomod(self.unmap_histogram, seldf, gsel,
+                           log=self.unmap_log_check.value)
 
     @property
     def default_map_layout(self):
@@ -790,11 +1280,11 @@ class VisHandler(object):
         laysel_box = VBox(
             [ipyw.Label("Layer:",
                         layout={'align_self':'flex-start'}),
-            self.layselector],
+             self.layer_selector],
             layout=Layout(justify_content='space-around')
         )
         csel_box = VBox(
-            [HBox([self.cmapselector, self.cmapreverse, self.logselector],
+            [HBox([self.cmap_selector, self.cmap_reverse, self.map_log_check],
                   layout=Layout(width='100%',
                                 display='flex',
                                 justify_content='space-around',
@@ -819,14 +1309,14 @@ class VisHandler(object):
                                      border='1px solid grey'))
         iter_box = Box([ipyw.Label("Iteration:",
                         layout={'align_self':'flex-start'}),
-                        self.iterselector],
+                        self.iter_selector],
                        layout=Layout(justify_content='flex-start'))
-        sel2_box = Box([VBox([self.wobselector,
-                   self.mapselector]),
-             VBox([iter_box,
-                   self.rpselector,
-                   HBox([self.pslider, self.realselector])])],
-            layout=Layout(
+        sel2_box = Box([VBox([self.weighted_obs_checkbox,
+                              self.map_obs_selector]),
+                        VBox([iter_box,
+                              self.reals_or_ptile_radio,
+                              HBox([self.prob_slider, self.real_selector])])],
+                       layout=Layout(
                 width='100%',
                 # height='260px',
                 # background='#52B5E8',
@@ -835,9 +1325,9 @@ class VisHandler(object):
                 align_items='flex-start',
                 border='1px dashed grey'
             )
-        )
+                       )
         map_box = Box(
-            [self.mapwidget],
+            [self.map_widget],
             layout=Layout(
                 flex='1 1 auto',
                 width='100%',
@@ -853,7 +1343,7 @@ class VisHandler(object):
         )
 
         slider_box = Box(
-            [self.tslider],
+            [self.map_temporal_slider],
             layout=Layout(
                 width='100%',
                 height='60px',
@@ -866,7 +1356,7 @@ class VisHandler(object):
         )
 
         histo_box = Box(
-            [self.maphisto],
+            [self.map_histogram],
             layout=Layout(
                 width='100%',
                 min_height='400px',
@@ -921,49 +1411,12 @@ class VisHandler(object):
 
     @property
     def default_unmap_layout(self):
-        if self.unmaphisto is None:
+        if self.unmap_histogram is None:
             return None
         unmapbox = ipyw.VBox([
             ipyw.HTML("<h1>Unmappable Obs:</h1>"),
-            ipyw.Box([self.unmapgroupselector, self.unmapselector]),
-            self.unmaphisto
+            ipyw.Box([self.unmap_group_selector, self.unmap_selector]),
+            ipyw.Box([self.unmap_histogram, ipyw.VBox([self.unmap_temporal_slider,
+                                                       self.unmap_log_check])])
         ])
         return unmapbox
-
-    def set_slider_options(self, index_col='time',
-                           options=None, parobs='obs',
-                           description="Select:"):
-        """
-        Set the options for the time-equiv slider.
-
-        Parameters
-        ----------
-        index_col : str, optional
-            The column in the observation dataframe to use for the slider options.
-            Default is 'time'.
-        options : list, optional
-            List of options to set for the slider. If None, unique values in index_col for paramter
-            or observation data (according to the value of parobs).
-        parobs : str, optional
-            The type of data to use for the slider options, either 'obs' or 'par'.
-            Default is 'obs'.
-        description : str, optional
-            The description for the slider widget.
-            Default is "Select:".
-
-        """
-        if parobs not in ['obs', 'par']:
-            raise ValueError("parobs must be either 'obs' or 'par'")
-        elif parobs == 'par':
-            df = self.pst.parameter_data
-        else:
-            df = self.pst.observation_data
-        if options is None:
-            options = sorted(df[index_col].fillna('none').unique().tolist())
-
-        if len(options) < 2:
-            self.tslider.disabled = True
-        self.tslider.options = [(t,i) for i, t in enumerate(options)]
-        self.tslider.value = 0
-        self.tslider.description = description
-        pass

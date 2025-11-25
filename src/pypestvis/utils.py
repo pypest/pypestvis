@@ -2,10 +2,8 @@
 Utils for vis builders
 """
 
-import pyemu
 import numpy as np
 from pathlib import Path
-import pandas as pd
 import pickle
 import warnings
 
@@ -17,7 +15,12 @@ def _sort_key(x):
         return (0, x)
 
 
-def mg2geojson(mg, wd=None, crs='epsg:2193'):
+def get_cellid_fromij(idxs, shape):
+    # todo: this could be fleshed out to be more flexible
+    return np.ravel_multi_index(idxs, shape)
+
+
+def mg2geojson(mg, crs=None):
     """
     Convert model grid to GeoJSON format.
 
@@ -31,21 +34,61 @@ def mg2geojson(mg, wd=None, crs='epsg:2193'):
     import pandas as pd
     import json
 
+    if crs is None:
+        crs = mg.crs
+        if crs is None:
+            warnings.warn("No crs passed, geojson will be in unprojected coords and may not map correctly")
+
     if isinstance(mg, (Path, str)):
         mg = get_mg_from_grb(mg)
     ib = mg.idomain.reshape(mg.shape)
-
     # Create a GeoDataFrame from the model grid
-    cells = pd.DataFrame(np.argwhere(ib != 0), columns=['k', 'i', 'j'])
+    # we are going to try and just create a single layer json
+    # this might work for struct and maybe disv bu disu will need something else.
+    # for now just using ij to build grid
+    cells = pd.DataFrame(np.argwhere(ib.any(axis=0)), columns=['i', 'j'])
     cells['in_verts'] = polygons(np.array(
         mg.get_cell_vertices(cells.i.values, cells.j.values)  # uses baked in flopy method
         ).transpose((2, 0, 1)).tolist())
-    cells['cellid'] = mg.get_node(cells[['k','i','j']].values.tolist())
-    cells = gpd.GeoDataFrame(cells, geometry=gpd.GeoSeries(cells['in_verts'], crs=crs).to_crs(lcrs))
-    cells = cells.drop(columns=['in_verts']).set_index('cellid')
-    if wd is not None:
-        cells.to_file(Path(wd, f'model_grid.json'), driver='GeoJSON')
-    return json.loads(cells.to_json())
+    cells['cellid'] = get_cellid_fromij(tuple(cells[['i','j']].values.T), mg.shape[1:])
+
+    # cells = pd.DataFrame(np.argwhere(ib != 0), columns=['k', 'i', 'j'])
+    # cells['in_verts'] = polygons(np.array(
+    #     mg.get_cell_vertices(cells.i.values, cells.j.values)  # uses baked in flopy method
+    #     ).transpose((2, 0, 1)).tolist())
+    # cells['cellid'] = mg.get_node(cells[['k','i','j']].values.tolist())
+    geoms = gpd.GeoSeries(cells['in_verts'], crs=crs)
+    if crs is not None: # project to lat/lon
+        geoms = geoms.to_crs(lcrs)
+    cells = gpd.GeoDataFrame(cells, geometry=geoms)
+    cells = cells.set_index('cellid').geometry
+    asjson = cells.to_json(show_bbox=False)
+    return json.loads(asjson)
+
+
+def get_geojson(geojson, mg=None, crs=None, wd=None,
+                write=False):
+    import json
+    assert any([geojson, mg, wd]), "one of geojson, mg, or wd must be provided"
+    _mg = mg
+    if isinstance(geojson, (str, Path)):
+        # will be Path as default to saving in assets
+        try:
+            with open(geojson, 'r') as fp:
+                geojson = json.load(fp)
+            return geojson  # will return without writing (all good)
+        except FileNotFoundError:
+            pass
+        if mg is None:
+            _mg, _ = get_mg_mt(wd)
+        # and can be used to identify to map data to the grid (e.g a cellid)
+        _geojson = mg2geojson(_mg, crs=crs)
+        if write:
+            Path(geojson).parent.mkdir(parents=True, exist_ok=True)
+            with open(geojson, 'w') as fp:
+                json.dump(_geojson, fp)
+        geojson = _geojson
+    return geojson
 
 
 def get_mg_mt(d):
@@ -73,7 +116,7 @@ def get_mg_mt(d):
             version='mf6',
             # exe_name='mf6',
             verbosity_level=0,
-            load_only=['dis', 'tdis', 'grb'],
+            load_only=['dis', 'tdis'],
             lazy_io=True
         )
         gwf = sim.get_model()

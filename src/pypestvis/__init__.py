@@ -7,9 +7,8 @@ __credits__ = []
 
 __all__ = [
     "VisHandler",
-    "VisGroupHandler",
 ]
 
 from . import core, utils
 # from ._version import version as __version__
-from .core import VisHandler, VisGroupHandler
+from .core import VisHandler
