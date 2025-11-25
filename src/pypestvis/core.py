@@ -1099,27 +1099,22 @@ class VisHandler(object):
             mapfig = self.map_widget
         cellid = self._sel_cellid
         print("selected cellid :", cellid)
+        trace = mapfig.data[0]
+        # base line styles -- Create arrays for line styling
+        line_widths = [0.5] * len(trace.locations)
+        line_colors = ['gainsboro'] * len(trace.locations)
         with mapfig.batch_update():
-            trace = mapfig.data[0]
-            # Reset all line widths
-            # trace.marker.line.width = 0.5
-            # trace.marker.line.color = 'gainsboro'
-            line_widths = [0.5] * len(trace.locations)
-            line_colors = ['gainsboro'] * len(trace.locations)
             if cellid is not None and cellid in trace.locations:
-                # Create arrays for line styling
                 idx = list(trace.locations).index(cellid)
-
                 # Highlight selected cell
                 print("Highlighting cell:", cellid, "at index", idx)
                 line_widths[idx] = 2
                 line_colors[idx] = 'white'
-
             else:
                 print("No cell selected or cellid not in map data.")
                 self._sel_cellid = None
-            trace.marker.line.width = line_widths
-            trace.marker.line.color = line_colors
+            trace.update(marker_line_width=line_widths)
+            trace.update(marker_line_color=line_colors)
 
     def _set_sel_name(self):
         if self._sel_cellid is None:
