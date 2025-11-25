@@ -20,7 +20,8 @@ from .utils import (_guess_mappable, get_mg_mt,
 
 class VisHandler(object):
     """
-    Handler for visualizations in the web application. Currently flopy mf6 modelgrid dependent.
+    Handler for visualizations in the web application. Currently flopy mf6
+    modelgrid dependent.
     """
     def __init__(self,
                  pst,
@@ -37,19 +38,37 @@ class VisHandler(object):
         Parameters
         ----------
         pst : pyemu.Pst or str or Path
-        geojson : str or dict, optional
+            Pest control file for project
+        geojson : str or json, optional
+            Geojson file dict for model grid features for plotting
         wd : str or Path, optional
+            Project working directory for the model. Needed if either mg or mt
+            are None.
         mg : flopy.ModelGrid, optional
+            Flopy (for now) model grid definition for the model. Needed if
+            geojson is None.
         mt : flopy.ModelTime, optional
+            Flopy (for now) model time definition for the model. Needed for
+            time referencing of obs data.
         crs : str, optional
-            Optional coordinate reference system for the model grid.
+            Coordinate reference system for the model grid.
             Only used if geojson is None when it is passed to constructor
             method `mg2geojson` to build json from modelgrid object.
             Defaults to None -- will not attempt to project from model coord
             to lat/lon.
         groupby : str, optional
-        tidx: str, optional
+            Column name in pst.observation_data to group observations by.
+            Default is 'obgnme'.
+        tidx : str, optional
+            Column name in pst.observation_data to use as temporal index for
+            time slider. Default is 'time'.
+        write_json : bool, optional
+            Write geojson to file if geojson is None and
+            needs to be built from modelgrid. Default is False.
+            If True will write to assets/{pstname}_modelgrid.json as default
+            (supposedly for faster browser cacheing).
         """
+
         self.__pst = pst
         self.__geojson = geojson
         self.__wd = wd
@@ -87,6 +106,7 @@ class VisHandler(object):
 
         # need a geojson for mapping
         if geojson is None:
+            # set to default value
             geojson = Path("assets", f"{self.name}_modelgrid.json")
         self.geojson = get_geojson(geojson=geojson,
                                    mg=mg,
@@ -1053,15 +1073,6 @@ class VisHandler(object):
         unmaphisto = go.FigureWidget(unmaphisto)
         return unmaphisto
 
-    def set_both(self, *args):
-        """
-        Set both map and histogram widgets.
-        This is a convenience method to update both widgets at once.
-        """
-        self.set_map(*args)
-        if len(self.unmapable) > 0:
-            self.set_unmap()
-
     def on_map_click(self, *clickdata):
         trace, p, s = clickdata
         # print(t.locations)
@@ -1118,7 +1129,7 @@ class VisHandler(object):
                 idx = self._tmp_map_idxmap.xs(self._sel_cellid)
             except KeyError as err:
                 # TODO better handling of missed cellid
-                print(f"'{self._sel_cellid}' not found in cached index map for group '{self._tmp_map_gph.name}'")
+                print(f"Cell '{self._sel_cellid}' not found in cached index map for group '{self._tmp_map_gph.name}'")
                 idx = None
             self._sel_name = idx
 
@@ -1159,12 +1170,6 @@ class VisHandler(object):
             histowgt.update_traces(x=[], selector=dict(name=f"obs+noise"))
             histowgt.update_traces(x=[obsplus[0]]*50, visible=True,
                                    selector=dict(name=f"obsval"))
-
-        # else:
-        #     # no obs+noise for this group
-        #     histowgt.update_traces(x=[], selector=dict(name=f"obs+noise"))
-        #     histowgt.update_traces(x=[None]*50, visible=False,
-        #                            selector=dict(name=f"obsval"))
 
     def update_maphisto(self):
         # cellid = self._sel_cellid

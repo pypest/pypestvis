@@ -72,6 +72,7 @@ def get_geojson(geojson, mg=None, crs=None, wd=None,
     assert any([geojson, mg, wd]), "one of geojson, mg, or wd must be provided"
     _mg = mg
     if isinstance(geojson, (str, Path)):
+        # will be Path as default to saving in assets
         try:
             with open(geojson, 'r') as fp:
                 geojson = json.load(fp)

@@ -105,13 +105,16 @@ def test_no_t(tmp_path):
     obs = obs.loc[(obs.kper == '0') |
                   ((obs.oname=='sfr') &
                    (obs.time=='1')), :]
+    # expecting user to provide a kper col if no time col
+    # (and some mapping to time -- e.g. mt)
     obs['kper'] = obs.kper.fillna(0).astype(int)
-
     obs = obs.drop(columns=['time'])
     pst.observation_data = obs
     vh = ppv.VisHandler(pst, wd=m_d)
+    # test a click callback
     vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[10]), None)
 
+    # test with no kper either
     obs = obs.drop(columns=['kper', 'kstp'], errors='ignore')
     pst.observation_data = obs
     vh = ppv.VisHandler(pst, wd=m_d)
@@ -119,6 +122,7 @@ def test_no_t(tmp_path):
 
 
 def test_t_str(tmp_path):
+    # testing (some) strings in time col
     from plotly import callbacks
     m_d = tmp_path / "freyberg_ies"
     pst = spinup_freyberg(tmp_path)
@@ -131,33 +135,76 @@ def test_t_str(tmp_path):
     pst.observation_data = obs
     sel = 10
     vh = ppv.VisHandler(pst, wd=m_d)
+    # value at selection
     z = vh.map_widget.data[0].z[sel]
     vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[sel]), None)
     selval = _check_selval(vh, sel)
     # default k should be 0 and only 1 time
     assert 1 not in [i for v,i in vh.map_temporal_slider.options]
+
+    # change layer
     vh.layer_selector.value = '1'
     # sel should be diff as active locations different in layer 1
     sel2 = np.where(vh.map_widget.data[0].locations == vh._sel_cellid)[0][0]
     selval = _check_selval(vh, sel2)
     z2 = vh.map_widget.data[0].z[sel2]
+    # new values should be diff to previous layer
     assert z2 != z
+
+    # temporal slider to 1 -- should be available in layer 2
     vh.map_temporal_slider.value = 1
     # should only be one value now
     assert len(vh.map_widget.data[0].z) == 1
     z3 = vh.map_widget.data[0].z[0]
     assert z3 != z2
-    # now map should be avail
     vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[0]), None)
     selval = _check_selval(vh, 0)
     assert selval == z3
+
+    # back to top layer
     vh.layer_selector.value = '0'
+    # back to original time
     vh.map_temporal_slider.value = 0
     vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[sel]), None)
     selval = _check_selval(vh, sel)
+    # val to should be equiv. to original
     assert selval == z
 
 
+def test_no_weighted(tmp_path):
+    from plotly import callbacks
+    m_d = Path("examples", "freyberg_ies")
+    pst = spinup_freyberg(tmp_path)
+    obs = pst.observation_data
+    obs['weight'] = 0
+    pst.observation_data = obs
+    vh = ppv.VisHandler(pst, wd=m_d)
+    assert vh.weighted_obs_checkbox.value is False
+    assert vh.weighted_obs_checkbox.disabled is True
+    vh.on_map_click(vh.map_widget.data[0],
+                    callbacks.Points(point_inds=[10]), None)
+    selval = _check_selval(vh, 10)
+    obsdatas = [d for d in vh.map_histogram.data if 'obs' in d.name]
+    for d in obsdatas:
+        assert not np.any(d.x), \
+            f"obs should be empty for zero weights, check {d.name}"
+
+
+def test_no_obsplus(tmp_path):
+    from plotly import callbacks
+    m_d = Path("examples", "freyberg_ies")
+    pst = spinup_freyberg(tmp_path)
+    m_d = tmp_path / m_d.name
+    for d in m_d.glob("*obs+noise*"):
+        d.unlink()
+    vh = ppv.VisHandler(pst, wd=m_d)
+    vh.on_map_click(vh.map_widget.data[0],
+                    callbacks.Points(point_inds=[10]), None)
+    selval = _check_selval(vh, 10)
+    obsdatas = [d for d in vh.map_histogram.data if 'obs+plus' in d.name]
+    for d in obsdatas:
+        assert not np.any(d.x), \
+            f"obs+noise should be empty for zero weights, check {d.name}"
 
 
 @pytest.mark.parametrize("option", ['model', 'grb', 'pkl'])
@@ -174,27 +221,7 @@ def test_lh(tmp_path, option):
         if option == 'pkl':
             for f in m_d.glob('*.grb'):
                 f.unlink()
-    pst = pyemu.Pst(str(m_d / "lhgzsi.pst"))
-    obs = pst.observation_data
-    scenmap = pd.read_csv(Path(m_d, "scenario.csv")).set_index('kper')
-    chdmap = scenmap.CHD.fillna('none').to_dict()
-    # fix up i,j,ks to make zero based
-    # obs.groupby('obgnme').first()
-    # clean up metadata
-    # fill kper etc
-    obs[['kper', 'kstp']] = obs[['kper', 'kstp']].astype('Int32').fillna(0)
-    # fixing issue with dummy obs that made it incompatible
-    obs['idx0'] = obs.idx0.replace('dummy', None)
-
-    # in this instance safe to fill k,i,j with idx0...
-    obs = obs.fillna({'k': obs.idx0, 'i': obs.idx1, 'j': obs.idx2}).astype(
-        {c: "Int32" for c in ['k', 'i', 'j', 'kstp', 'kper']}).fillna({'k': 0})
-
-    # need annoying one-based (parfile tables) to zerobased
-    obs.loc[obs.obgnme.str.contains("chd|ghb", na=False), ['k', 'i', 'j']] -= 1
-    obs['slider'] = obs.kper.apply(lambda x: (x, chdmap[int(x)]))
-    # put back on pest object
-    pst.observation_data = obs
+    pst = str(m_d / "lhgzsi.pst")
     vh = ppv.VisHandler(pst, wd=m_d, crs='EPSG:2913')
     vh._sel_cellid = 5408
     vh.highlight_cell()
