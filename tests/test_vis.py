@@ -171,6 +171,38 @@ def test_t_str(tmp_path):
     assert selval == z
 
 
+def test_weighted_check(tmp_path):
+    from plotly import callbacks
+    from traitlets import TraitError
+    m_d = Path("examples", "freyberg_ies")
+    pst = spinup_freyberg(tmp_path)
+    obs = pst.observation_data
+    obs.loc[obs.obgnme=='hdar', 'weight'] = 0
+    pst.observation_data = obs
+    vh = ppv.VisHandler(pst, wd=m_d)
+    assert vh.weighted_obs_checkbox.value is False
+    assert vh.map_obs_selector.value == 'hdar'
+    vh.on_map_click(vh.map_widget.data[0],
+                    callbacks.Points(point_inds=[10]), None)
+    selval = _check_selval(vh, 10)
+    vh.weighted_obs_checkbox.value = True
+    assert vh.map_obs_selector.value == 'hdar2'  # should have switched
+    assert vh._sel_cellid is None
+    try:
+        vh.map_obs_selector.value = 'hdar'
+    except TraitError:
+        pass  # should not be able to set back to unweighted
+    else:
+        raise Exception("should not be able to set obs selector back to unweighted")
+    vh.weighted_obs_checkbox.value = False
+    assert vh.map_obs_selector.value == 'hdar2'  # should still be the same
+    vh.map_obs_selector.value = 'hdar'
+    vh.on_map_click(vh.map_widget.data[0],
+                    callbacks.Points(point_inds=[10]), None)
+    selval2 = _check_selval(vh, 10)
+    assert selval2 == selval  # should be same
+
+
 def test_no_weighted(tmp_path):
     from plotly import callbacks
     m_d = Path("examples", "freyberg_ies")
@@ -188,6 +220,10 @@ def test_no_weighted(tmp_path):
     for d in obsdatas:
         assert not np.any(d.x), \
             f"obs should be empty for zero weights, check {d.name}"
+    # try force weighted
+    vh.weighted_obs_checkbox.value = True
+    # should be rejected
+    assert vh.weighted_obs_checkbox.value is False
 
 
 def test_no_obsplus(tmp_path):
