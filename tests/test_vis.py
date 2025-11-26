@@ -220,6 +220,10 @@ def test_no_weighted(tmp_path):
     for d in obsdatas:
         assert not np.any(d.x), \
             f"obs should be empty for zero weights, check {d.name}"
+    # try force weighted
+    vh.weighted_obs_checkbox.value = True
+    # should be rejected
+    assert vh.weighted_obs_checkbox.value is False
 
 
 def test_no_obsplus(tmp_path):
