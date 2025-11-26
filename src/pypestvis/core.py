@@ -660,6 +660,10 @@ class VisHandler(object):
         if self._callback_off:
             return
         # called when weighted obs checkbox change
+        if self.weighted_obs_checkbox.value:
+            print("Toggle on weighted obs...")
+        else:
+            print("Toggle off weighted obs...")
         with self.callback_off():  # don't want to trigger all the callbacks?
             # current map_obs_selector value
             cv = self.map_obs_selector.value
@@ -668,25 +672,25 @@ class VisHandler(object):
                 gridw = set(self.nonzero_groups) & set(self.gridmapable)
                 if len(gridw) > 0:
                     # update options to only weighted
-                    self.map_obs_selector.options = sorted(gridw)
+                    opts = sorted(gridw)
                     self.weighted_obs_checkbox.disabled = False
                 else:
                     # if none then reset and disable checkbox
                     self.weighted_obs_checkbox.value = False
                     self.weighted_obs_checkbox.disabled = True
+                    opts = self.gridmapable
             else:
                 # reset to all gridmapable
-                self.map_obs_selector.options = self.gridmapable
+                opts = self.gridmapable
             # fix value to current if possible
-        if cv in self.map_obs_selector.options:
-            self.map_obs_selector.value = cv
-            # no propagation should be needed -- or should it?
-            self.select_map_obs_gp(change=change)
-        else:
-            self.map_obs_selector.value = self.map_obs_selector.options[0]
-            # propagate change
-            # self.select_map_obs_gp(change=change)
-            # self.set_map(change)
+            self.map_obs_selector.options = opts
+            if cv in opts:
+                # make sure value stays the same if possible
+                self.map_obs_selector.value = cv
+            else:
+                self.map_obs_selector.value = self.map_obs_selector.options[0]
+        # propagate now
+        self.select_map_obs_gp(change=change)
 
     # map_obs_selector callback
     def select_map_obs_gp(self, change=None):
@@ -727,7 +731,9 @@ class VisHandler(object):
             return
         # called when map_obs_selector value changes
         # update group handler loaded for mapping
-        self._tmp_map_gph = self.obs_gphandlers[self.map_obs_selector.value]
+        gp = self.map_obs_selector.value
+        print(f"Extracting outputs for {gp}")
+        self._tmp_map_gph = self.obs_gphandlers[gp]
         self.set_ensemble(propagate=False)
         # TODO: check vminvmax defaults
         self._uservminmax = False
@@ -773,6 +779,7 @@ class VisHandler(object):
         o_k = self.layer_selector.value
         # get group handler for selected group
         gph = self._tmp_map_gph # is is already set on obs gp change
+        print(f"Setting layer options for {gph.name}...")
         lookup = gph.group_info
         # expecting layer index level -2
         if self.weighted_obs_checkbox.value:
@@ -821,8 +828,10 @@ class VisHandler(object):
 
         """
         # called when layer selector changes
-        kdf = self._tmp_map_gph.group_info.xs(self.layer_selector.value,
-                                              level=-2)
+        k = self.layer_selector.value
+        gp = self._tmp_map_gph.name  # is is already set on obs gp change
+        print(f"Extracting layer data for {gp}@k:{k}...")
+        kdf = self._tmp_map_gph.group_info.xs(k, level=-2)
         if self.weighted_obs_checkbox.value:
             # filter to weighted only
             kdf = kdf[kdf.weight != 0]
@@ -843,6 +852,7 @@ class VisHandler(object):
             slider = self.map_temporal_slider
         if idxmap is None:
             idxmap = self._tmp_map_kidxmap
+        print("Setting slider options...")
         t = self._get_tidx(slider)
         options = idxmap.index.unique(self.tidx).tolist()
         isnone = True
@@ -866,12 +876,15 @@ class VisHandler(object):
 
     def set_ensemble(self, change=None, propagate=True):
         i = self.iter_selector.value
+        gp = self._tmp_map_gph.name
         # PRELOADING ENSEMBLE AT ITERATION
         if self.reals_or_ptile_radio.value == 'r':
+            print(f"Loading {gp} realisation ensemble for iter {i}...")
             ens = self._tmp_map_gph.ens.xs(i, level=0, axis=1)
             self.real_selector.disabled = False
             self.prob_slider.disabled = True
         else:
+            print(f"Loading {gp} quantiles for iter {i}...")
             ens = self._tmp_map_gph.qtiles.xs(i, level=0, axis=1)
             self.real_selector.disabled = True
             self.prob_slider.disabled = False
@@ -916,7 +929,6 @@ class VisHandler(object):
             # if we are in a callback, don't do anything
             return
         # will be used in callback so need to handle change arg
-        print("Setting map...")
         if mapfig is None:
             mapfig = self.map_widget
         if mapfig is None:
@@ -936,11 +948,12 @@ class VisHandler(object):
         idxmap = self._tmp_map_kidxmap # is is already set on layer sel
         t = self._get_tidx(self.map_temporal_slider)
         k = self.layer_selector.value
-
         if self.reals_or_ptile_radio.value == 'r':
             c = self.real_selector.value
+            print(f"Setting map for {gph.name}@k:{k},t:{t},real{c}...")
         else:
             c = int(self.prob_slider.value)
+            print(f"Setting map for {gph.name}@k:{k},t:{t},P{c}...")
 
         # get current selected iteration
         cmap = self.cmap_selector.value
