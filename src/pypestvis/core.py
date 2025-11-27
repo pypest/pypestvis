@@ -154,9 +154,14 @@ class VisHandler(object):
         if len(self.gridmapable) > 0 or len(self.pointmapable) > 0:
             # should trigger cascade through to set_map
             self.set_mapsel_options()
+            # finalise map widget as FigureWidget for interactivity
+            self.map_widget = go.FigureWidget(self.map_widget)
+            self.map_widget.data[0].on_click(self.on_map_click)
         if len(self.unmapable) > 0:
             # should trigger set_unmap
             self.set_unmap_group()
+            # make into widget
+            self.unmap_histogram = go.FigureWidget(self.unmap_histogram)
 
     def __str__(self):
         return (f"VisHandler for Pst: '{str(self.name)}' with {len(self.obs_gphandlers)} obs groups:\n"
@@ -555,7 +560,7 @@ class VisHandler(object):
             # customdata=[0] * len(json['features']),
             geojson=None,  # json with cell edges
             locations=[],
-            z=[],
+            z=np.array([]),
             customdata=[],
             colorscale="plasma",
             showscale=True,
@@ -568,10 +573,9 @@ class VisHandler(object):
             name='cpmap'
         )
         # TODO: add scatter widget for point mappables!!
+        # leave as Figure object until after first
+        # update_traces call for voila compat.
         fig = go.Figure(cpmap, layout=layout)
-        # self.set_map(mapfig=fig)
-        fig = go.FigureWidget(fig)
-        fig.data[0].on_click(self.on_map_click)
 
         histo = go.Figure(
             [go.Histogram(histnorm='probability density', name=f"iter_{i}", opacity=0.75) for i in
@@ -1083,8 +1087,8 @@ class VisHandler(object):
             hovertemplate="obsval: %{x}<extra></extra>",
             visible=False
         ))
-        # make into widget
-        unmaphisto = go.FigureWidget(unmaphisto)
+        # leave a plotly figure for voila compat
+        # convert to figwidget after first update_traces call
         return unmaphisto
 
     def on_map_click(self, *clickdata):
