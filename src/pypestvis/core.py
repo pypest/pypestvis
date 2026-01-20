@@ -79,6 +79,8 @@ class VisHandler(object):
         self.__tidx = tidx
         self.__write_json = write_json
 
+        self.crs = crs
+
         self._callback_off = False
         self._callback_off_count = 0
 
@@ -236,8 +238,18 @@ class VisHandler(object):
                     df['x'] = np.nan
                 if 'y' not in df.columns:
                     df['y'] = np.nan
-                df = df.fillna({'x': pd.Series(mg.xcellcenters[df.i.values, df.j.values]),
-                                'y': pd.Series(mg.ycellcenters[df.i.values, df.j.values])})
+                df = df.fillna(pd.DataFrame(
+                    {'x': mg.xcellcenters[df.i.values, df.j.values],
+                     'y': mg.ycellcenters[df.i.values, df.j.values]},
+                    index=df.index
+                ))
+                if parent.crs is not None:
+                    import geopandas as gpd
+                    df[['x', 'y']] = gpd.GeoSeries.from_xy(
+                        *df[['x', 'y']].values.T,
+                        crs=parent.crs,
+                        index=df.index
+                    ).to_crs('epsg:4326').get_coordinates()
                 idxcols = ['x', 'y', 'k', tidx]
             else:
                 # update parent class with name of group
@@ -572,10 +584,25 @@ class VisHandler(object):
                           '<extra></extra>',
             name='cpmap'
         )
+
+        scatmap = go.Scattermap(
+            lat=[],
+            lon=[],
+            mode='markers',
+            marker=dict(
+                size=8,
+                color='blue',
+                opacity=0.7,
+            ),
+            hovertemplate='<b>%{customdata}</b><br>' +  # Only show custom data
+                          '<extra></extra>',
+            name='scatmap'
+        )
+
         # TODO: add scatter widget for point mappables!!
         # leave as Figure object until after first
         # update_traces call for voila compat.
-        fig = go.Figure(cpmap, layout=layout)
+        fig = go.Figure([cpmap,scatmap], layout=layout)
 
         histo = go.Figure(
             [go.Histogram(histnorm='probability density', name=f"iter_{i}", opacity=0.75) for i in
@@ -673,7 +700,7 @@ class VisHandler(object):
             cv = self.map_obs_selector.value
             if self.weighted_obs_checkbox.value:
                 # get weighted groups that are gridmapable
-                gridw = set(self.nonzero_groups) & set(self.gridmapable)
+                gridw = set(self.nonzero_groups) & set(self.gridmapable + self.pointmapable)
                 if len(gridw) > 0:
                     # update options to only weighted
                     opts = sorted(gridw)
@@ -682,10 +709,10 @@ class VisHandler(object):
                     # if none then reset and disable checkbox
                     self.weighted_obs_checkbox.value = False
                     self.weighted_obs_checkbox.disabled = True
-                    opts = self.gridmapable
+                    opts = self.gridmapable + self.pointmapable
             else:
                 # reset to all gridmapable
-                opts = self.gridmapable
+                opts = self.gridmapable + self.pointmapable
             # fix value to current if possible
             self.map_obs_selector.options = opts
             if cv in opts:
@@ -994,17 +1021,57 @@ class VisHandler(object):
         print("vminvmax: ", zmin, zmax)
 
         with mapfig.batch_update():
-            mapfig.update_traces(
-                geojson=self.geojson,
-                z=z,
-                zmin=zmin,
-                zmax=zmax,
-                zauto=True if zmin is None or zmax is None else False,
-                locations=locs,
-                colorscale=cmap,
-                customdata=z,
-                selector=dict(name='cpmap')
-            )
+            if gph.mapable == 'grid':
+                mapfig.update_traces(
+                    geojson=self.geojson,
+                    z=z,
+                    zmin=zmin,
+                    zmax=zmax,
+                    zauto=True if zmin is None or zmax is None else False,
+                    locations=locs,
+                    colorscale=cmap,
+                    customdata=z,
+                    selector=dict(name='cpmap')
+                )
+                mapfig.update_traces(
+                    lon=[],
+                    lat=[],
+                    marker=dict(
+                        color=[],
+                        colorscale=cmap,
+                        cmin=zmin,
+                        cmax=zmax,
+                        cauto=True if zmin is None or zmax is None else False,
+                    ),
+                    customdata=z,
+                    selector=dict(name='scatmap')
+                )
+            else:
+                mapfig.update_traces(
+                    geojson=[],
+                    z=[],
+                    zmin=zmin,
+                    zmax=zmax,
+                    zauto=True if zmin is None or zmax is None else False,
+                    locations=locs,
+                    colorscale=cmap,
+                    customdata=z,
+                    selector=dict(name='cpmap')
+                )
+                mapfig.update_traces(
+                    lon=locs.get_level_values('x').to_list(),
+                    lat=locs.get_level_values('y').to_list(),
+                    marker=dict(
+                        color=z,
+                        colorscale=cmap,
+                        cmin=zmin,
+                        cmax=zmax,
+                        cauto=True if zmin is None or zmax is None else False,
+                    ),
+                    customdata=z,
+                    selector=dict(name='scatmap')
+                )
+
         if not self._uservminmax:
             with self.callback_off():
                 self._reset_vminmax(mapfig=mapfig)
