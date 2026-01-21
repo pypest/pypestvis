@@ -32,6 +32,7 @@ class VisHandler(object):
                  crs=None,  # coordinate reference system for the modelgrid -- will be converted to WGS84
                  groupby='obgnme',  # groupby for the obs data, default is obgnme
                  tidx='time',
+                 locidx=None,  # location index for identifying unique obs locations
                  write_json=False,):
         """
 
@@ -105,6 +106,7 @@ class VisHandler(object):
         self.mt = mt
         # carry temporal slider index column name
         self.tidx = tidx
+        self.locidx = locidx
 
         # need a geojson for mapping
         if geojson is None:
@@ -159,6 +161,7 @@ class VisHandler(object):
             # finalise map widget as FigureWidget for interactivity
             self.map_widget = go.FigureWidget(self.map_widget)
             self.map_widget.data[0].on_click(self.on_map_click)
+            self.map_widget.data[1].on_click(self.on_map_click)
         if len(self.unmapable) > 0:
             # should trigger set_unmap
             self.set_unmap_group()
@@ -180,6 +183,7 @@ class VisHandler(object):
                 fr"    crs='{str(self.__crs)}',"'\n'
                 fr"    groupby='{str(self.groupby)}',"'\n'
                 fr"    tidx='{str(self.tidx)}',"'\n'
+                fr"    locidx='{str(self.locidx)}',"'\n'                             
                 fr"    write_json={str(self.__write_json)}"'\n'
                 ')')
 
@@ -211,6 +215,7 @@ class VisHandler(object):
 
             mg = parent.mg
             tidx = parent.tidx
+            locidx = parent.locidx
             self.name = gpname
             layer_col = 'k'
             # check status of i,j columns
@@ -250,12 +255,23 @@ class VisHandler(object):
                         crs=parent.crs,
                         index=df.index
                     ).to_crs('epsg:4326').get_coordinates()
-                idxcols = ['x', 'y', 'k', tidx]
+                if locidx is None:
+                    _locidx = 'site'
+                else:
+                    _locidx = locidx
+                if _locidx not in df.columns or df[_locidx].isna().all():
+                    df[_locidx] = pd.factorize(pd._libs.lib.fast_zip(
+                        [df.x.values,df.y.values]))[0].astype(str)
+                idxcols = [_locidx, 'x', 'y', 'k', tidx]
             else:
                 # update parent class with name of group
                 parent.unmapable.append(gpname)
                 # assuming usecol is unique identifier for unmapable obs
-                idxcols = ['usecol', tidx]
+                if locidx is None:
+                    usecol = 'usecol'
+                else:
+                    usecol = locidx
+                idxcols = [usecol, tidx]
 
             # make sure that there is something in the time index columns
             # incols = df.columns.intersection({'kper', 'kstp', 'k', 'i', 'j'})
@@ -579,7 +595,7 @@ class VisHandler(object):
             marker_line_width=0.5,
             marker_line_color='gainsboro',
             marker_opacity=0.8,
-            hovertemplate='<b>%{location}</b><br>' +
+            hovertemplate='<b>%{meta}</b><br>' +
                           '%{customdata}<br>' +  # Only show custom data
                           '<extra></extra>',
             name='cpmap'
@@ -593,8 +609,15 @@ class VisHandler(object):
                 size=8,
                 color='blue',
                 opacity=0.7,
+                showscale=True,
             ),
-            hovertemplate='<b>%{customdata}</b><br>' +  # Only show custom data
+            # selected=go.scattermap.Selected(
+            #     marker=dict(opacity=1, size=12)
+            # ),
+            customdata=[],
+            meta=[],
+            hovertemplate='<b>%{meta}</b><br>' +
+                          '%{customdata}<br>' +  # Only show custom data
                           '<extra></extra>',
             name='scatmap'
         )
@@ -1000,9 +1023,11 @@ class VisHandler(object):
             seldf = ens.loc[idxmap.values, c]
             z = seldf.values
             locs = idxmap.index
+            meta = locs.get_level_values(0)
         except KeyError:
             z = np.array([])
             locs = np.array([])
+            meta = np.array([])
         if len(z) == 0:
             print(f"no map data for group '{gph.name}' @ k:{k}, t:{t}")
         # handle log scale
@@ -1031,21 +1056,24 @@ class VisHandler(object):
                     locations=locs,
                     colorscale=cmap,
                     customdata=z,
+                    meta=meta,
                     selector=dict(name='cpmap')
                 )
                 mapfig.update_traces(
                     lon=[],
                     lat=[],
                     marker=dict(
-                        color=[],
+                        color=z,
                         colorscale=cmap,
                         cmin=zmin,
                         cmax=zmax,
                         cauto=True if zmin is None or zmax is None else False,
                     ),
                     customdata=z,
+                    meta=meta,
                     selector=dict(name='scatmap')
                 )
+                trace = mapfig.data[0]
             else:
                 mapfig.update_traces(
                     geojson=[],
@@ -1056,6 +1084,7 @@ class VisHandler(object):
                     locations=locs,
                     colorscale=cmap,
                     customdata=z,
+                    meta=meta,
                     selector=dict(name='cpmap')
                 )
                 mapfig.update_traces(
@@ -1069,13 +1098,15 @@ class VisHandler(object):
                         cauto=True if zmin is None or zmax is None else False,
                     ),
                     customdata=z,
+                    meta=meta,
                     selector=dict(name='scatmap')
                 )
+                trace = mapfig.data[1]
 
         if not self._uservminmax:
             with self.callback_off():
                 self._reset_vminmax(mapfig=mapfig)
-        self.highlight_cell(mapfig)
+        self.highlight_cell(trace)
         if change is not None:
             if change['owner'] == self.real_selector or change['owner'] == self.prob_slider:
                 print("Only updating guide line")
@@ -1160,50 +1191,53 @@ class VisHandler(object):
 
     def on_map_click(self, *clickdata):
         trace, p, s = clickdata
-        # print(t.locations)
+        if len(p.point_inds) == 0:
+            return
+        print("point_inds for sel: ", p.point_inds)
         # get group handler for selected group
         idx = p.point_inds[0]
         print("map index value: ", idx)
-        cellid = trace.locations[idx]
+        cellid = trace.meta[idx]
         self._sel_cellid = cellid
-        self.highlight_cell()
+        self.highlight_cell(trace)
         self._set_sel_name()
         with self.map_histogram.batch_update():
             self.update_maphisto()
 
-    def highlight_cell(self, mapfig=None):
+    def highlight_cell(self, trace=None):
         """
         Highlight a specific cell in the map.
 
         Parameters
         ----------
-        cellid : int
-            The ID of the cell to highlight.
+        trace : plotly.graph_objects.trace.Trace object
+            plotly trace object containing the map data.
         """
-        if mapfig is None:
-            mapfig = self.map_widget
+        if trace is None:
+            trace = self.map_widget.data[0]
+        mapfig = trace.figure
         cellid = self._sel_cellid
         print("selected cellid :", cellid)
-        trace = mapfig.data[0]
-        # base line styles -- Create arrays for line styling
-        line_widths = [0.5] * len(trace.locations)
-        line_colors = ['gainsboro'] * len(trace.locations)
-        with mapfig.batch_update():
-            if cellid is not None and cellid in trace.locations:
-                idx = list(trace.locations).index(cellid)
-                # Highlight selected cell
-                print("Highlighting cell:", cellid, "at index", idx)
-                line_widths[idx] = 2
-                line_colors[idx] = 'white'
-            else:
-                print("No cell selected or cellid not in map data.")
-                self._sel_cellid = None
-            trace.update(marker_line_width=line_widths)
-            trace.update(marker_line_color=line_colors)
+        if hasattr(trace.marker, "line"):
+            # base line styles -- Create arrays for line styling
+            line_widths = [0.5] * len(trace.meta)
+            line_colors = ['gainsboro'] * len(trace.meta)
+            with mapfig.batch_update():
+                if cellid is not None and cellid in trace.meta:
+                    idx = list(trace.meta).index(cellid)
+                    # Highlight selected cell
+                    print("Highlighting cell:", cellid, "at index", idx)
+                    line_widths[idx] = 2
+                    line_colors[idx] = 'white'
+                else:
+                    print("No cell selected or cellid not in map data.")
+                    self._sel_cellid = None
+                trace.update(marker_line_width=line_widths)
+                trace.update(marker_line_color=line_colors)
 
     def _set_sel_name(self):
         if self._sel_cellid is None:
-            self._sel_name = None
+            idx = None
         else:
             try:
                 idx = self._tmp_map_idxmap.xs(self._sel_cellid)
@@ -1211,7 +1245,9 @@ class VisHandler(object):
                 # TODO better handling of missed cellid
                 print(f"Cell '{self._sel_cellid}' not found in cached index map for group '{self._tmp_map_gph.name}'")
                 idx = None
-            self._sel_name = idx
+        if isinstance(idx, pd.Series):
+            idx = idx.iloc[0]
+        self._sel_name = idx
 
     def _histomod(self, histowgt, df, gp, log=False):
         if df is None:
@@ -1261,6 +1297,9 @@ class VisHandler(object):
             warnings.warn("Cellid and tidx match more than one output",
                           UserWarning)
             idx = idx.iloc[0]
+        if idx is None:
+            self.map_histogram.update_traces(x=[] )
+            return
         try:
             self._sel_ensdf = self._tmp_map_gph.ens.xs(idx)
         except KeyError as err:
