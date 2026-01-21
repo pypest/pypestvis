@@ -1,6 +1,6 @@
 [project]
 name = "pypestvis"
-version = "0.1.1rc2"
+version = "0.1.1rc3"
 description = "General vis tool for PEST++ run results"
 readme = "README.md"
 authors = [
