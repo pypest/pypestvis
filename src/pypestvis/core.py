@@ -841,6 +841,8 @@ class VisHandler(object):
             # filter to weighted only
             lookup = lookup[lookup.weight != 0]
         kopt = sorted(lookup.index.unique(-2))
+        if len(kopt) > 1 and self._tmp_map_gph.mapable == 'point':
+            kopt = ['all'] + kopt
         # update options and values
         # WILL TRIGGER LAYER SELECTOR CALLBACK if ok changes
         if o_k is None or o_k not in kopt:
@@ -884,9 +886,14 @@ class VisHandler(object):
         """
         # called when layer selector changes
         k = self.layer_selector.value
+        if k == 'all' and self._tmp_map_gph.mapable == 'point':
+            k = slice(None)
         gp = self._tmp_map_gph.name  # is is already set on obs gp change
         print(f"Extracting layer data for {gp}@k:{k}...")
-        kdf = self._tmp_map_gph.group_info.xs(k, level=-2)
+        mapdf = self._tmp_map_gph.group_info
+        nlev = mapdf.index.nlevels
+        kslice = (slice(None),) * (nlev - 2) + (k,) + (slice(None),)
+        kdf = mapdf.loc[kslice, :].droplevel(-2)
         if self.weighted_obs_checkbox.value:
             # filter to weighted only
             kdf = kdf[kdf.weight != 0]
