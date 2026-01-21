@@ -18,6 +18,8 @@ def spinup_freyberg(tmp):
             "_", expand=True, n=3)[[1, 2, 3]].values
     # split hdar into a second group
     obs.loc[(obs.obgnme == 'hdar') & (obs.i.astype("Int32")>20), 'obgnme'] = 'hdar2'
+    othersel = ~obs.obgnme.str.startswith('hdar')
+    obs.loc[othersel, 'obgnme'] = obs.loc[othersel, 'usecol']
     pst.observation_data = obs
     return pst
 
@@ -42,7 +44,7 @@ def test_freyberg(tmp_path):
     sel = 10
     m_d = tmp_path / "freyberg_ies"
     pst = spinup_freyberg(tmp_path)
-    vh = ppv.VisHandler(pst, wd=m_d)
+    vh = ppv.VisHandler(pst, wd=m_d, crs="epsg:32614")
     z = vh.map_widget.data[0].z[sel]
     vh.map_temporal_slider.value = 1
     z2 = vh.map_widget.data[0].z[sel]
@@ -71,6 +73,11 @@ def test_freyberg(tmp_path):
     selval5 = _check_selval(vh, sel)
     assert selval5 != selval4 # should have changed
     assert selval5 == selval2  # should have changed
+
+    vh.map_obs_selector.value = 'trgw'
+    vh.on_map_click(vh.map_widget.data[1], callbacks.Points(point_inds=[0]), None)
+
+    pass
 
 
 def test_nounmap(tmp_path):
