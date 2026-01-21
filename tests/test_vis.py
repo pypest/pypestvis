@@ -45,34 +45,34 @@ def test_freyberg(tmp_path):
     m_d = tmp_path / "freyberg_ies"
     pst = spinup_freyberg(tmp_path)
     vh = ppv.VisHandler(pst, wd=m_d, crs="epsg:32614")
-    # z = vh.map_widget.data[0].z[sel]
-    # vh.map_temporal_slider.value = 1
-    # z2 = vh.map_widget.data[0].z[sel]
-    # assert z != z2 # should be different at time 1
+    z = vh.map_widget.data[0].z[sel]
+    vh.map_temporal_slider.value = 1
+    z2 = vh.map_widget.data[0].z[sel]
+    assert z != z2 # should be different at time 1
     vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[sel]), None)
-    # selval = _check_selval(vh, sel)
-    # assert np.isclose(selval, z2) # should be same after click
-    #
-    # # switch obgnme
-    # vh.map_obs_selector.value = 'hdar2'
-    # assert len(vh.map_histogram.data[0].x) == 0  # should have cleared histo
-    # vh.map_obs_selector.value = 'hdar'
-    #
-    # vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[sel]), None)
-    # vh.prob_slider.value = 90
-    # selval2 = _check_selval(vh, sel)
-    # assert selval2 > selval # should be larger at P90
-    #
-    # vh.reals_or_ptile_radio.value = 'r'
-    # selval3 = _check_selval(vh, sel)
-    # assert selval3 != selval2 # should have changed
-    # vh.real_selector.value = '0'
-    # selval4 = _check_selval(vh, sel)
-    # assert selval4 != selval3 # should have changed
-    # vh.reals_or_ptile_radio.value = 'p'
-    # selval5 = _check_selval(vh, sel)
-    # assert selval5 != selval4 # should have changed
-    # assert selval5 == selval2  # should have changed
+    selval = _check_selval(vh, sel)
+    assert np.isclose(selval, z2) # should be same after click
+
+    # switch obgnme
+    vh.map_obs_selector.value = 'hdar2'
+    assert len(vh.map_histogram.data[0].x) == 0  # should have cleared histo
+    vh.map_obs_selector.value = 'hdar'
+
+    vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[sel]), None)
+    vh.prob_slider.value = 90
+    selval2 = _check_selval(vh, sel)
+    assert selval2 > selval # should be larger at P90
+
+    vh.reals_or_ptile_radio.value = 'r'
+    selval3 = _check_selval(vh, sel)
+    assert selval3 != selval2 # should have changed
+    vh.real_selector.value = '0'
+    selval4 = _check_selval(vh, sel)
+    assert selval4 != selval3 # should have changed
+    vh.reals_or_ptile_radio.value = 'p'
+    selval5 = _check_selval(vh, sel)
+    assert selval5 != selval4 # should have changed
+    assert selval5 == selval2  # should have changed
 
     vh.map_obs_selector.value = 'trgw'
     vh.on_map_click(vh.map_widget.data[1], callbacks.Points(point_inds=[0]), None)
