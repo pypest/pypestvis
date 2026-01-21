@@ -4,8 +4,7 @@ on:
   schedule:
     - cron: '38 8 * * 0,3,6' # At 9:42 UTC daily
   push:
-    branches:
-      - main
+
   pull_request:
     branches:
       - main
