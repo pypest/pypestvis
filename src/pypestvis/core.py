@@ -381,21 +381,22 @@ class VisHandler(object):
     # Widget Construction
     def _build_widgets(self):
         # Mapable widgets
-        if len(self.gridmapable) > 0 or len(self.pointmapable) > 0:
+        mappable = list(self.gridmapable) + list(self.pointmapable)
+        if len(mappable) > 0:
             self.map_widget, self.map_histogram = self._get_plotly_mapfig() if self.geojson else (None, None)
         # Mappable and observation selection
         self.map_obs_selector = ipyw.RadioButtons(
-            options=self.gridmapable,  # list of grid based output groups that can map to json features
+            options=mappable,  # list of grid based output groups that can map to json features
             # value=self.gridmapable[0],
-            description='Gridded datasets:',
-            disabled=False if len(self.gridmapable) > 0 else True,
+            description='Mappable datasets:',
+            disabled=False if len(mappable) > 0 else True,
         )
-        self.point_obs_selector = ipyw.RadioButtons(
-            options=self.pointmapable,  # list of point based output groups that can map to scatter maps
-            # value=self.gridmapable[0],
-            description='Scatter datasets:',
-            disabled=False if len(self.pointmapable) > 0 else True,
-        )
+        # self.point_obs_selector = ipyw.RadioButtons(
+        #     options=self.pointmapable,  # list of point based output groups that can map to scatter maps
+        #     # value=self.gridmapable[0],
+        #     description='Scatter datasets:',
+        #     disabled=False if len(self.pointmapable) > 0 else True,
+        # )
         # Layer selector mappable obs
         self.layer_selector = ipyw.Dropdown(
             options=[], # set later based on selected obs group?
