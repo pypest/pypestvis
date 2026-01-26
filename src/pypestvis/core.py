@@ -383,7 +383,9 @@ class VisHandler(object):
         # Mapable widgets
         mappable = list(self.gridmapable) + list(self.pointmapable)
         if len(mappable) > 0:
-            self.map_widget, self.map_histogram = self._get_plotly_mapfig() if self.geojson else (None, None)
+            if self.geojson:
+                self._build_mappable_plotly()
+
         # Mappable and observation selection
         self.map_obs_selector = ipyw.RadioButtons(
             options=mappable,  # list of grid based output groups that can map to json features
@@ -563,7 +565,9 @@ class VisHandler(object):
         self.unmap_temporal_slider.observe(self.set_unmap, names=['value'])
         self.unmap_log_check.observe(self.set_unmap, names=['value'])
 
-    def _get_plotly_mapfig(self):
+    def _build_mappable_plotly(self):
+        from itertools import cycle
+        from plotly.colors import DEFAULT_PLOTLY_COLORS
         json = self.geojson
         centroids = []
         for feature in json['features']:
@@ -637,8 +641,8 @@ class VisHandler(object):
                         margin=dict(t=10, b=10, l=10, r=10),
                         yaxis2=dict(overlaying="y", range=[0,1], visible=False))
         )
-        histo.data[0].update(marker_color='rgba(112,112,112,0.75)')
         histo.data[-1].update(marker_color='rgba(20,49,220,0.75)')
+        histo.data[0].update(marker_color='rgba(112,112,112,0.75)')
         histo.add_trace(go.Histogram(
             marker_color='rgba(0,0,0,0)',  # Transparent fill
             marker_line_color='red',  # Outline color
@@ -664,7 +668,72 @@ class VisHandler(object):
                                    showlegend=False,
                                    hovertemplate="mapval: %{x}<extra></extra>"))
         histo = go.FigureWidget(histo)
-        return fig, histo
+
+        tsplot = go.Figure(layout=dict(margin_t=30,
+                                       margin_b=10,
+                                       margin_l=10,
+                                       margin_r=10,
+                                       width=600,
+                                       height=300,
+                                       title='T-series',
+                                       showlegend=False,
+                                       xaxis_autorange=True))
+        # if using the redraw method this detail is not needed here
+        # only used for trace update approach (not clear which will be faster)
+        iters = sorted(self.real_dict.keys())
+        ccycle = cycle(DEFAULT_PLOTLY_COLORS)
+        allreals = {vv for v in self.real_dict.values() for vv in v}
+        with tsplot.batch_update():
+            for i, reals in self.real_dict.items():
+                if i == iters[0]:
+                    c = 'rgba(112,112,112,0.75)'
+                elif i == iters[-1]:
+                    c = 'rgba(20,49,220,0.75)'
+                else:
+                    c = next(ccycle)
+                print(c)
+                for r in reals:
+                    tsplot.add_trace(
+                        go.Scattergl(name=f"{i}_{r}",
+                                     legendgroup=f'iter_{i}',
+                                     mode='lines',
+                                     line=dict(color=c, width=0.5),
+                                     hovertemplate=None, hoverinfo='none',
+                                     opacity=0.5)
+                    )
+            for r in allreals:
+                tsplot.add_trace(
+                    go.Scattergl(name=f"obs+noise_{r}",
+                                 legendgroup=f"obs+noise",
+                                 mode='lines',
+                                 line=dict(color='red', width=0.5),
+                                 hovertemplate=None, hoverinfo='none',
+                                 opacity=0.5)
+                )
+            tsplot.add_trace(
+                go.Scattergl(name=f"obsval",
+                             legendgroup=f"obsval",
+                             mode='markers',
+                             marker=dict(color='red'),
+                             hovertemplate=None,
+                             hoverinfo='none',
+                             opacity=0.5)
+            )
+        tsplot.add_vline(x=0,
+                         line_color='black',
+                         annotation_text="histo time",
+                         annotation_name="time",
+                         annotation_visible=False,
+                         name="tsel",
+                         visible=False,
+                         showlegend=True)
+        tsplot = go.FigureWidget(tsplot)
+
+
+
+        self.map_widget = fig
+        self.map_histogram = histo
+        self.map_ts = tsplot
 
     # Callbacks
     @contextmanager
@@ -1119,9 +1188,12 @@ class VisHandler(object):
             if change['owner'] == self.real_selector or change['owner'] == self.prob_slider:
                 print("Only updating guide line")
                 self.update_maphisto_line()
+                if change['owner'] == self.real_selector:
+                    self.update_mapts_real()
             else:
                 print("Updating histogram")
                 self.update_maphisto()
+                self.update_mapts()
 
 
     def set_vminmax(self, change=None):
@@ -1171,8 +1243,8 @@ class VisHandler(object):
                         yaxis2=dict(overlaying="y", range=[0,1], visible=False))
         )
         # maker first and last histo grey and blue
-        unmaphisto.data[0].update(marker_color='rgba(112,112,112,0.75)')
         unmaphisto.data[-1].update(marker_color='rgba(20,49,220,0.75)')
+        unmaphisto.data[0].update(marker_color='rgba(112,112,112,0.75)')
         # add noise histo
         unmaphisto.add_trace(go.Histogram(
             marker_color='rgba(0,0,0,0)',  # Transparent fill
@@ -1211,6 +1283,8 @@ class VisHandler(object):
         self._set_sel_name()
         with self.map_histogram.batch_update():
             self.update_maphisto()
+        with self.map_ts.batch_update():
+            self.update_mapts()
 
     def highlight_cell(self, trace=None):
         """
@@ -1338,6 +1412,42 @@ class VisHandler(object):
         with self.map_histogram.batch_update():
             # Remove any existing vertical line
             self.map_histogram.update_traces(x=[data] * 50, selector=dict(name=f"mapval"))
+
+
+    def update_mapts(self):
+        tsplot = self.map_ts
+        if self._sel_cellid is None:
+            # clear
+            x = []
+            iterator = ([(i, r),[]] for i, reals in self.real_dict.items() for r in reals)
+        else:
+            # get index across time
+            # this may need tweaking for more complex dfs
+            idxs = self._tmp_map_kidxmap.loc[(self._sel_cellid, slice(None))].sort_index()
+            x = idxs.index
+            idx = idxs.values
+            # obs across times sliced from ensemble
+            df = self._tmp_map_gph.ens.loc[idx, :].set_index(x)
+            iterator = df.T.itertuples()
+
+        with tsplot.batch_update():
+            # vh.map_ts.data = []
+            for dfi in iterator:
+                i, r = dfi[0]  # iteration and real
+                lw = 0.5
+                if i == self.iter_selector.value:
+                    if (self.reals_or_ptile_radio.value == 'r' and
+                        r == self.real_selector.value):
+                        lw = 10.0
+                tsplot.update_traces(x=x,  # defined above
+                                     y=dfi[1:],  # itertuples so 0 is index
+                                     showlegend=True,
+                                     line_width=lw,
+                                     selector=dict(name=f'{i}_{r}'))
+
+    def update_mapts_real(self):
+        pass
+
 
     def set_unmap_group(self, change=None):
         """
