@@ -1449,7 +1449,12 @@ class VisHandler(object):
                     # (to account for 'all' layer option)
                     mapdf = self._tmp_map_gph.group_info.ensmap
                     # slicer from selected obsname (across time)
-                    slicer = mapdf.index[mapdf == self._sel_name].remove_unused_levels().set_levels([slice(None)], level=self.tidx).values[0]
+                    try:
+                        slicer = mapdf.index[mapdf == self._sel_name].remove_unused_levels().set_levels([slice(None)], level=self.tidx).values[0]
+                    except TypeError:  # fails on early pandas versions
+                        slicer = mapdf.index[mapdf == self._sel_name].remove_unused_levels()
+                        tp = slicer.names.index(self.tidx)
+                        slicer = slicer.values[0][:tp] + (slice(None),) + slicer.values[0][tp+1:]
                     # extract indices for selected, across time
                     idxs = mapdf.loc[slicer].sort_index()
                 except KeyError as err:  # slicing returns an error (cellid not in map)
