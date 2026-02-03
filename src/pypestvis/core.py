@@ -15,7 +15,8 @@ from shapely.geometry import shape
 from ipywidgets import VBox, HBox, Box, Layout
 
 from .utils import (_guess_mappable, get_mg_mt,
-                    _sort_key, get_geojson, get_cellid_fromij)
+                    _sort_key, get_geojson, get_cellid_fromij,
+                    _nat_sort)
 
 
 class VisHandler(object):
@@ -123,6 +124,7 @@ class VisHandler(object):
         self.pointmapable = []
         self.unmapable = []
         # self.weighted = []
+        self.lines = None
 
         # carry grouping column
         self.groupby = groupby
@@ -280,6 +282,7 @@ class VisHandler(object):
                 # default is 'time', so infer from kper/kstp if absent
                 if 'time' not in df.columns:
                     df['time'] = np.nan
+                # df['time'] = df.time.astype(float)
                 # can only do this if we have some reference to build
                 # this could be user built ahead of calling this class
                 if parent.mt is not None and df.time.isna().any():
@@ -287,26 +290,26 @@ class VisHandler(object):
                     # and if and null in that column
                     # this will need generalising
                     if 'kper' in df.columns:
-                        kperkstp = df.kper.fillna(0).to_frame()  # fill na with 0 for now
+                        # nullable pandas int
+                        kperkstp = df.kper.astype("Int32").fillna(0).to_frame() # fill na with 0 for now
                         if 'kstp' in df.columns:
-                            kperkstp['kstp'] = df.kstp
+                            kperkstp['kstp'] = df.kstp.astype("Int32")
                         else:
                             kperkstp['kstp'] = np.nan
+                        kperkstp.loc[kperkstp.kstp.isna(), 'kstp'] = (parent.mt.nstp[kperkstp.kper] - 1)[kperkstp.kstp.isna()]
                         kperkstp = kperkstp.astype("Int32")
-                        df['time'] = df.time.fillna(
-                            kperkstp.apply(
-                                lambda x: parent.mt.get_elapsed_time(
-                                    x.kper,
-                                    x.kstp if not pd.isna(x.kstp) else None
-                                ), axis=1).astype(float)
-                        )
+                        # fill nans
+                        df.loc[df.time.isna(), 'time'] = [
+                            parent.mt.get_elapsed_time(per, stp).astype(df.time.dtype.type)
+                            for per,stp in kperkstp.loc[df.time.isna()].values
+                        ]
             # At the moment, we want whatever is in tidx to be sortable
             # so all need to be the same dtype
-            if df[tidx].apply(pd.api.types.is_number).any():
-                try:
-                    df[tidx] = pd.to_numeric(df[tidx], downcast="integer")
-                except Exception:
-                    df[tidx] = df[tidx].astype(str)
+            try:
+                df[tidx] = pd.to_numeric(df[tidx], downcast="integer",
+                                         errors="raise")
+            except ValueError:
+                df[tidx] = df[tidx].astype(str)
             # fill nans in tidx with 'none' for more
             # reliable grouping and indexing -- need to split out none when sorting later
             df = df.fillna({tidx: 'none'})
@@ -383,7 +386,9 @@ class VisHandler(object):
         # Mapable widgets
         mappable = list(self.gridmapable) + list(self.pointmapable)
         if len(mappable) > 0:
-            self.map_widget, self.map_histogram = self._get_plotly_mapfig() if self.geojson else (None, None)
+            if self.geojson:
+                self._build_mappable_plotly()
+
         # Mappable and observation selection
         self.map_obs_selector = ipyw.RadioButtons(
             options=mappable,  # list of grid based output groups that can map to json features
@@ -466,7 +471,7 @@ class VisHandler(object):
         um = self.unmapable
         ig = None
         if len(um) > 0:
-            self.unmap_histogram = self._get_plotly_unmapfig()
+            self._set_plotly_unmapfig()
             ig = um[0]
         self.unmap_group_selector = ipyw.Dropdown(options=self.unmapable,
                                                   description="Non-mappable groups: ",
@@ -563,7 +568,9 @@ class VisHandler(object):
         self.unmap_temporal_slider.observe(self.set_unmap, names=['value'])
         self.unmap_log_check.observe(self.set_unmap, names=['value'])
 
-    def _get_plotly_mapfig(self):
+    def _build_mappable_plotly(self):
+        from itertools import cycle
+        from plotly.colors import DEFAULT_PLOTLY_COLORS
         json = self.geojson
         centroids = []
         for feature in json['features']:
@@ -637,8 +644,8 @@ class VisHandler(object):
                         margin=dict(t=10, b=10, l=10, r=10),
                         yaxis2=dict(overlaying="y", range=[0,1], visible=False))
         )
-        histo.data[0].update(marker_color='rgba(112,112,112,0.75)')
         histo.data[-1].update(marker_color='rgba(20,49,220,0.75)')
+        histo.data[0].update(marker_color='rgba(112,112,112,0.75)')
         histo.add_trace(go.Histogram(
             marker_color='rgba(0,0,0,0)',  # Transparent fill
             marker_line_color='red',  # Outline color
@@ -664,7 +671,32 @@ class VisHandler(object):
                                    showlegend=False,
                                    hovertemplate="mapval: %{x}<extra></extra>"))
         histo = go.FigureWidget(histo)
-        return fig, histo
+
+        tsplot = go.Figure(layout=dict(margin_t=30,
+                                       margin_b=10,
+                                       margin_l=10,
+                                       margin_r=10,
+                                       width=600,
+                                       height=300,
+                                       title='T-series',
+                                       showlegend=True,
+                                       xaxis_autorange=True))
+        tsplot.add_vline(x=0,
+                         line_color='black',
+                         line_dash='dash',
+                         annotation_text="selected time",
+                         annotation_name="selected time",
+                         annotation_visible=False,
+                         name="tsel",
+                         visible=True,
+                         showlegend=True)
+        tsplot = go.FigureWidget(tsplot)
+
+
+
+        self.map_widget = fig
+        self.map_histogram = histo
+        self.map_ts = tsplot
 
     # Callbacks
     @contextmanager
@@ -840,7 +872,7 @@ class VisHandler(object):
         if self.weighted_obs_checkbox.value:
             # filter to weighted only
             lookup = lookup[lookup.weight != 0]
-        kopt = sorted(lookup.index.unique(-2))
+        kopt = _nat_sort(lookup.index.unique(-2))
         if len(kopt) > 1 and self._tmp_map_gph.mapable == 'point':
             kopt = ['all'] + kopt
         # update options and values
@@ -849,8 +881,9 @@ class VisHandler(object):
             self.layer_selector.options = kopt
             self.layer_selector.value = kopt[0]
         else:
-            self.layer_selector.options = kopt
-            self.layer_selector.value = o_k
+            with self.callback_off():
+                self.layer_selector.options = kopt
+                self.layer_selector.value = o_k
             self.select_map_layer(change=change)
 
     # layer_selector callback
@@ -1065,6 +1098,7 @@ class VisHandler(object):
                     colorscale=cmap,
                     customdata=z,
                     meta=meta,
+                    visible=True,
                     selector=dict(name='cpmap')
                 )
                 mapfig.update_traces(
@@ -1079,6 +1113,7 @@ class VisHandler(object):
                     ),
                     customdata=z,
                     meta=meta,
+                    visible=False,
                     selector=dict(name='scatmap')
                 )
                 trace = mapfig.data[0]
@@ -1093,6 +1128,7 @@ class VisHandler(object):
                     colorscale=cmap,
                     customdata=z,
                     meta=meta,
+                    visible=False,
                     selector=dict(name='cpmap')
                 )
                 mapfig.update_traces(
@@ -1107,6 +1143,7 @@ class VisHandler(object):
                     ),
                     customdata=z,
                     meta=meta,
+                    visible=True,
                     selector=dict(name='scatmap')
                 )
                 trace = mapfig.data[1]
@@ -1122,6 +1159,22 @@ class VisHandler(object):
             else:
                 print("Updating histogram")
                 self.update_maphisto()
+            if change['owner'] == self.map_temporal_slider:
+                print("Shifting marker line on tseries")
+                self.update_ts_tline()
+                if len(self.unmapable) > 0:
+                    self.update_ts_tline(self.unmap_ts, self.unmap_temporal_slider)
+            elif ((change['owner']==self.real_selector or
+                   change['owner']==self.reals_or_ptile_radio or
+                   change['owner']==self.iter_selector) and
+                  self.reals_or_ptile_radio.value == 'r'):
+                print("Updating tseries real selection")
+                self.update_ts_real()
+                if len(self.unmapable) > 0:
+                    self.update_ts_real(self.unmap_ts)
+            else:
+                print("Updating tseries")
+                self.update_ts()
 
 
     def set_vminmax(self, change=None):
@@ -1158,7 +1211,7 @@ class VisHandler(object):
             t = t[0]
         return t
 
-    def _get_plotly_unmapfig(self):
+    def _set_plotly_unmapfig(self):
         unmaphisto = go.Figure(
             [go.Histogram(x=[],
                           histnorm='probability density',
@@ -1171,8 +1224,8 @@ class VisHandler(object):
                         yaxis2=dict(overlaying="y", range=[0,1], visible=False))
         )
         # maker first and last histo grey and blue
-        unmaphisto.data[0].update(marker_color='rgba(112,112,112,0.75)')
         unmaphisto.data[-1].update(marker_color='rgba(20,49,220,0.75)')
+        unmaphisto.data[0].update(marker_color='rgba(112,112,112,0.75)')
         # add noise histo
         unmaphisto.add_trace(go.Histogram(
             marker_color='rgba(0,0,0,0)',  # Transparent fill
@@ -1195,7 +1248,29 @@ class VisHandler(object):
         ))
         # leave a plotly figure for voila compat
         # convert to figwidget after first update_traces call
-        return unmaphisto
+        tsplot = go.Figure(layout=dict(margin_t=30,
+                                       margin_b=10,
+                                       margin_l=10,
+                                       margin_r=10,
+                                       width=600,
+                                       height=300,
+                                       title='T-series',
+                                       showlegend=True,
+                                       xaxis_autorange=True))
+        tsplot.add_vline(x=0,
+                         line_color='black',
+                         line_dash='dash',
+                         annotation_text="selected time",
+                         annotation_name="selected time",
+                         annotation_visible=False,
+                         name="tsel",
+                         legendgroup="tsel",
+                         visible=True,
+                         showlegend=True)
+        tsplot = go.FigureWidget(tsplot)
+
+        self.unmap_histogram = unmaphisto
+        self.unmap_ts = tsplot
 
     def on_map_click(self, *clickdata):
         trace, p, s = clickdata
@@ -1211,6 +1286,8 @@ class VisHandler(object):
         self._set_sel_name()
         with self.map_histogram.batch_update():
             self.update_maphisto()
+        # with self.map_ts.batch_update():
+        self.update_ts()
 
     def highlight_cell(self, trace=None):
         """
@@ -1271,7 +1348,7 @@ class VisHandler(object):
         obsplus = gph.obsplus
         obsidx = df.name
         # if no obsplus or obsidx not in obsplus index, clear obs+noise trace
-        if gph.obsplus is None or obsidx not in gph.obsplus.index:
+        if obsplus is None or obsidx not in gph.obsplus.index:
             # no obs+noise for this group
             histowgt.update_traces(x=[], selector=dict(name=f"obs+noise"))
             histowgt.update_traces(x=[None]*50, visible=False,
@@ -1306,7 +1383,7 @@ class VisHandler(object):
                           UserWarning)
             idx = idx.iloc[0]
         if idx is None:
-            self.map_histogram.update_traces(x=[] )
+            self.map_histogram.update_traces(x=[])
             return
         try:
             self._sel_ensdf = self._tmp_map_gph.ens.xs(idx)
@@ -1338,6 +1415,166 @@ class VisHandler(object):
         with self.map_histogram.batch_update():
             # Remove any existing vertical line
             self.map_histogram.update_traces(x=[data] * 50, selector=dict(name=f"mapval"))
+
+
+    def update_ts(self, v='map'):
+        from itertools import cycle
+        from plotly.colors import DEFAULT_PLOTLY_COLORS
+        if v == 'map':
+            tsplot = self.map_ts
+            ens = self._tmp_map_gph.ens
+            gpname = self._tmp_map_gph.name
+            obsplus = self._tmp_map_gph.obsplus
+            slider = self.map_temporal_slider
+        else:
+            tsplot = self.unmap_ts
+            ens = self._tmp_unmap_gph.ens
+            gpname = self._tmp_unmap_gph.name
+            obsplus = self._tmp_unmap_gph.obsplus
+            slider = self.unmap_temporal_slider
+        #sorted iteration keys for colors on the fly
+        iters = sorted(self.real_dict.keys())
+        ccycle = cycle(DEFAULT_PLOTLY_COLORS)
+
+        idxs = None
+        update = False
+        if v == 'map':
+            if self._sel_name is None:
+                pass  # update stays False
+            else:
+                # get index across time
+                # this may need tweaking for more complex dfs
+                try:
+                    # get selection mapping from full group infor map
+                    # (to account for 'all' layer option)
+                    mapdf = self._tmp_map_gph.group_info.ensmap
+                    # slicer from selected obsname (across time)
+                    try:
+                        slicer = mapdf.index[mapdf == self._sel_name].remove_unused_levels().set_levels([slice(None)], level=self.tidx).values[0]
+                    except TypeError:  # fails on early pandas versions
+                        slicer = mapdf.index[mapdf == self._sel_name].remove_unused_levels()
+                        tp = slicer.names.index(self.tidx)
+                        slicer = slicer.values[0][:tp] + (slice(None),) + slicer.values[0][tp+1:]
+                    # extract indices for selected, across time
+                    idxs = mapdf.loc[slicer].sort_index()
+                except KeyError as err:  # slicing returns an error (cellid not in map)
+                    # TODO better handling of missed idx (obsnme)
+                    print(f"'{self._sel_name}' not found in cached "
+                          f"ensemble for group '{gpname}'")
+        else:
+            idxs = self._tmp_unmap_idxmap.sort_index()
+
+        datmode = "markers+lines"  # plot outputs as markers+lines
+        if idxs is not None:
+            # get time index and obs names -- this will be sorted by time
+            x = idxs.index.get_level_values(self.tidx).values
+            obsnames = idxs.values.tolist()
+            if len(x) > 1:
+                # print("obsnames for ts: ", obsnames)
+                # print("time idx for ts: ", x)
+                # obs across times sliced from ensemble
+                df = ens.loc[obsnames, :].set_index(x)
+                # print("df for ts: ", df)
+                # only trigger update if df is more than one point
+                update = True if len(df) > 1 else False
+
+                # also get obs (plus noise) info
+                if obsplus is not None:
+                    # get obsnames across time
+                    obsplus = obsplus.loc[obsnames, :].set_index(x)
+                    # if just one unique value, then  we dont have an obs+noise ensemble
+                    if (obsplus.nunique(axis=1) == 1).all():
+                        obsplus = obsplus.iloc[:, [0]]  # slice out single column
+                        obsmode = "markers"  # plot obsvals as markers only
+                        datmode = "lines"  # plot outputs as lines only
+                        legendgroup = "obsval"  # define legend group for obsval only
+
+                    else:
+                        obsmode = "markers+lines"  # plot obs+noise as markers+lines
+                        legendgroup = "obs+noise"  # define legend group for obs+noise
+
+        lines = []  # empty unless new data to plot
+        if update:
+            leg = set([])
+            for dfi in df.T.itertuples():
+                i, r = dfi[0]  # iteration and real
+                if i == iters[0]:
+                    c = 'rgba(112,112,112,0.75)'
+                elif i == iters[-1]:
+                    c = 'rgba(20,49,220,0.75)'
+                else:
+                    c = next(ccycle)
+                lw = 0.7
+                lines.append(
+                    go.Scattergl(x=x,
+                                 y=np.array(dfi[1:]),  # itertuples so 0 is index
+                                 name=f'iter_{i}',
+                                 meta=f"{i}_{r}",
+                                 legendgroup=f'iter_{i}',
+                                 mode=datmode,
+                                 line=dict(color=c, width=lw),
+                                 marker_size=2,
+                                 hovertemplate=None,
+                                 hoverinfo='none',
+                                 opacity=0.5,
+                                 showlegend=i not in leg)
+                )
+                leg.add(i)
+            if obsplus is not None:
+                leg = True
+                for dfi in obsplus.T.itertuples():
+                    lines.append(
+                        go.Scattergl(x=x,
+                                     y=np.array(dfi[1:]),  # itertuples so 0 is index
+                                     name=f"obsval_{dfi[0]}",  # need to be this to pick up in update methods
+                                     legendgroup=legendgroup,
+                                     mode=obsmode,
+                                     marker=dict(color='red'),
+                                     line=dict(color='red', width=0.5),
+                                     hovertemplate=None,
+                                     hoverinfo='none',
+                                     opacity=0.5,
+                                     showlegend=leg)
+                    )
+                    leg = False  # only show legend once
+        self.lines=lines
+        # update in batch
+        with tsplot.batch_update():
+            print(f"Cleaning {v} ts plot")
+            # kill all existing data traces except for tsel
+            tsplot.data = []
+            if len(lines) > 1:
+                print(f"Adding updated traces to {v} ts plot")
+                tsplot.add_traces(lines)
+            self.update_ts_real(tsplot)
+            self.update_ts_tline(tsplot, slider)
+
+    def update_ts_real(self, tsplot=None):
+        if tsplot is None:
+            tsplot = self.map_ts
+        with tsplot.batch_update():
+            tsplot.update_traces(selector=dict(line_width=10), line_width=0.5)
+            if self.reals_or_ptile_radio.value == 'r':
+                print("Selecting real in ts...")
+                i = self.iter_selector.value
+                r = self.real_selector.value
+                tsplot.update_traces(selector=dict(meta=f"{i}_{r}"), line_width=10)
+
+    def update_ts_tline(self, tsplot=None, slider=None):
+        if tsplot is None:
+            tsplot = self.map_ts
+        if slider is None:
+            slider = self.map_temporal_slider
+        t = self._get_tidx(slider)
+        # if np.isnan(t):
+        #     return
+        print("Shifting tslider in ts...")
+        with tsplot.batch_update():
+            tsplot.update_shapes(
+                x0=t,
+                x1=t,
+                selector=dict(name="tsel")
+            )
 
     def set_unmap_group(self, change=None):
         """
@@ -1373,7 +1610,7 @@ class VisHandler(object):
         else:
             self.unmap_selector.value = self.unmap_selector.options[0]
         if osel == self.unmap_selector.value:
-            self.set_unmap_level()
+            self.set_unmap_level(change)
 
     def set_unmap_level(self, change=None):
         ens = self._tmp_unmap_gph.ens
@@ -1404,6 +1641,13 @@ class VisHandler(object):
         with self.unmap_histogram.batch_update():
             self._histomod(self.unmap_histogram, seldf, gsel,
                            log=self.unmap_log_check.value)
+        if change is not None and change.owner == self.unmap_temporal_slider:
+            print("Shifting marker line on unmap tseries")
+            self.update_ts_tline(tsplot=self.unmap_ts,
+                                slider=self.unmap_temporal_slider)
+        else:
+            self.update_ts(v='unmap')
+
 
     @property
     def default_map_layout(self):
@@ -1463,7 +1707,7 @@ class VisHandler(object):
                 flex='1 1 auto',
                 width='100%',
                 # min_height='600px',
-                # min_width='850px',
+                min_width='850px',
                 # background='#52B5E8',
                 display='flex',
                 justify_content='center',
@@ -1486,6 +1730,16 @@ class VisHandler(object):
             )
         )
 
+        ts_box = Box([self.map_ts],
+                     layout=Layout(width='100%',
+                                   min_height='100px',
+                                   display='flex',
+                                   justify_content='center',
+                                   align_items='center',
+                                   # border='3px solid black'
+                                   )
+                     )
+
         histo_box = Box(
             [self.map_histogram],
             layout=Layout(
@@ -1500,7 +1754,7 @@ class VisHandler(object):
         )
         # Create left column (Selector0, MapBox, SliderBox)
         left_column = VBox(
-            [sel0_box, map_box, slider_box],
+            [sel0_box, map_box, slider_box, ts_box],
             layout=Layout(
                 flex='1 1 60%',
                 min_width='300px',
@@ -1544,10 +1798,22 @@ class VisHandler(object):
     def default_unmap_layout(self):
         if self.unmap_histogram is None:
             return None
+        ts_box = Box([self.unmap_ts],
+                     layout=Layout(width='100%',
+                                   min_height='100px',
+                                   display='flex',
+                                   justify_content='center',
+                                   align_items='center',
+                                   # border='3px solid black'
+                                   )
+                     )
         unmapbox = ipyw.VBox([
             ipyw.HTML("<h1>Unmappable Obs:</h1>"),
-            ipyw.Box([self.unmap_group_selector, self.unmap_selector]),
-            ipyw.Box([self.unmap_histogram, ipyw.VBox([self.unmap_temporal_slider,
-                                                       self.unmap_log_check])])
+            ipyw.Box([self.unmap_group_selector,
+                      self.unmap_selector]),
+            ipyw.Box([self.unmap_histogram,
+                      ipyw.VBox([self.unmap_log_check,
+                                 self.unmap_temporal_slider,
+                                 ts_box])])
         ])
         return unmapbox
