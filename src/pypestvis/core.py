@@ -309,13 +309,10 @@ class VisHandler(object):
                 df[tidx] = pd.to_numeric(df[tidx], downcast="integer",
                                          errors="raise")
             except ValueError:
+                # fill nans in tidx with 'none' for more
+                # reliable grouping and indexing -- need to split out none when sorting later
                 df[tidx] = df[tidx].astype(str)
-            # fill nans in tidx with 'none' for more
-            # reliable grouping and indexing -- need to split out none when sorting later
-            df = df.fillna({tidx: 'none'})
-
-            # self.idxmap = df.loc[:, idxcols]
-            # self.idxmap_r = self.idxmap.reset_index().groupby(idxcols)[name].unique()
+                df = df.fillna({tidx: 'none'})
 
             if ens is None:
                 self.ens = None

@@ -164,7 +164,8 @@ def test_t_str(tmp_path):
     idxs = obs.loc[(obs.kper == '0') |
                   ((obs.oname=='sfr') &
                    (obs.time=='1')), :].index
-    obs['time'] = [num2str(x) for x in obs.time.astype("Int32").to_list()]
+    otime = obs.time.astype("Int32").to_list()
+    obs['time'] = [num2str(x) for x in otime]
 
     # obs = obs.loc[(obs.kper == '0') |
     #               ((obs.oname=='sfr') &
@@ -189,6 +190,7 @@ def test_t_str(tmp_path):
     z2 = vh.map_widget.data[0].z[sel2]
     # new values should be diff to previous layer
     assert z2 != z
+    vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[sel]), None)
 
     # temporal slider to 1 -- should be available in layer 2
     vh.map_temporal_slider.value = 1
@@ -210,6 +212,12 @@ def test_t_str(tmp_path):
     assert selval == z
 
     vh.unmap_group_selector.value = 'headwater'
+
+    obs['slider'] = otime
+    obs.loc[obs.index[0], 'slider'] = np.nan
+    pst.observation_data = obs
+    sel = 10
+    vh = ppv.VisHandler(pst, wd=m_d, tidx='slider')
     pass
 
 
