@@ -139,6 +139,20 @@ def test_no_t(tmp_path):
     vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[10]), None)
 
 
+def num2str(x):
+    import string
+    alpha = string.ascii_lowercase
+    try:
+        if np.isnan(x):
+            return x
+        if x < 26:
+            return alpha[x]
+        else:
+            return num2str(x//26 - 1) + alpha[x%26]
+    except TypeError:
+        return x
+
+
 def test_t_str(tmp_path):
     # testing (some) strings in time col
     from plotly import callbacks
@@ -146,10 +160,17 @@ def test_t_str(tmp_path):
     pst = spinup_freyberg(tmp_path)
     obs = pst.observation_data
     obs = obs.loc[(obs.kper == '0') |
+                  (obs.oname=='sfr'), :]
+    idxs = obs.loc[(obs.kper == '0') |
                   ((obs.oname=='sfr') &
-                   (obs.time=='1')), :]
-    obs['time'].iloc[0] = 'one'
-    obs['time'].iloc[3] = 'two'
+                   (obs.time=='1')), :].index
+    obs['time'] = [num2str(x) for x in obs.time.astype("Int32").to_list()]
+
+    # obs = obs.loc[(obs.kper == '0') |
+    #               ((obs.oname=='sfr') &
+    #                (obs.time=='1')), :]
+    # obs['time'].iloc[0] = 'one'
+    obs.loc[idxs[3], 'time'] = 'two'
     pst.observation_data = obs
     sel = 10
     vh = ppv.VisHandler(pst, wd=m_d)
@@ -187,6 +208,9 @@ def test_t_str(tmp_path):
     selval = _check_selval(vh, sel)
     # val to should be equiv. to original
     assert selval == z
+
+    vh.unmap_group_selector.value = 'headwater'
+    pass
 
 
 def test_weighted_check(tmp_path):
