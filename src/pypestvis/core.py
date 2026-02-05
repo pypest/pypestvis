@@ -955,7 +955,7 @@ class VisHandler(object):
             options.remove('none')
         except ValueError:
             isnone = False
-        options = sorted(options)
+        options = _nat_sort(options)
         if isnone:
             options = ['none'] + options
 
