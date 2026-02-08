@@ -1453,7 +1453,12 @@ class VisHandler(object):
                         tp = slicer.names.index(self.tidx)
                         slicer = slicer.values[0][:tp] + (slice(None),) + slicer.values[0][tp+1:]
                     # extract indices for selected, across time
-                    idxs = mapdf.loc[slicer].sort_index()
+                    # again a pandas version variation means that slicer can
+                    # return a single series value rather than a series with index
+                    try:
+                        idxs = mapdf.loc[slicer].sort_index()
+                    except AttributeError:
+                        idxs = mapdf.loc[[slicer]].sort_index()
                 except KeyError as err:  # slicing returns an error (cellid not in map)
                     # TODO better handling of missed idx (obsnme)
                     print(f"'{self._sel_name}' not found in cached "
