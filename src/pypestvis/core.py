@@ -309,13 +309,10 @@ class VisHandler(object):
                 df[tidx] = pd.to_numeric(df[tidx], downcast="integer",
                                          errors="raise")
             except ValueError:
+                # fill nans in tidx with 'none' for more
+                # reliable grouping and indexing -- need to split out none when sorting later
                 df[tidx] = df[tidx].astype(str)
-            # fill nans in tidx with 'none' for more
-            # reliable grouping and indexing -- need to split out none when sorting later
-            df = df.fillna({tidx: 'none'})
-
-            # self.idxmap = df.loc[:, idxcols]
-            # self.idxmap_r = self.idxmap.reset_index().groupby(idxcols)[name].unique()
+                df = df.fillna({tidx: 'none'})
 
             if ens is None:
                 self.ens = None
@@ -1456,7 +1453,12 @@ class VisHandler(object):
                         tp = slicer.names.index(self.tidx)
                         slicer = slicer.values[0][:tp] + (slice(None),) + slicer.values[0][tp+1:]
                     # extract indices for selected, across time
-                    idxs = mapdf.loc[slicer].sort_index()
+                    # again a pandas version variation means that slicer can
+                    # return a single series value rather than a series with index
+                    try:
+                        idxs = mapdf.loc[slicer].sort_index()
+                    except AttributeError:
+                        idxs = mapdf.loc[[slicer]].sort_index()
                 except KeyError as err:  # slicing returns an error (cellid not in map)
                     # TODO better handling of missed idx (obsnme)
                     print(f"'{self._sel_name}' not found in cached "

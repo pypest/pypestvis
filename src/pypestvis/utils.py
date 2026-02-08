@@ -187,7 +187,7 @@ def _guess_mappable(df):
 
 
 def _nat_sort(listlike):
-    import re
-    convert = lambda text: int(text) if text.isdigit() else text.lower()
-    alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', str(key))]
-    return sorted(listlike, key=alphanum_key)
+    try:
+        return sorted(listlike, key=float)
+    except ValueError:
+        return sorted(listlike)
