@@ -184,3 +184,10 @@ def _guess_mappable(df):
             return 'point'
     else:
         return 'unmap'
+
+
+def _nat_sort(listlike):
+    try:
+        return sorted(listlike, key=float)
+    except ValueError:
+        return sorted(listlike)

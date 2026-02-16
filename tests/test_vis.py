@@ -18,6 +18,8 @@ def spinup_freyberg(tmp):
             "_", expand=True, n=3)[[1, 2, 3]].values
     # split hdar into a second group
     obs.loc[(obs.obgnme == 'hdar') & (obs.i.astype("Int32")>20), 'obgnme'] = 'hdar2'
+    othersel = ~obs.obgnme.str.startswith('hdar')
+    obs.loc[othersel, 'obgnme'] = obs.loc[othersel, 'usecol']
     pst.observation_data = obs
     return pst
 
@@ -42,7 +44,18 @@ def test_freyberg(tmp_path):
     sel = 10
     m_d = tmp_path / "freyberg_ies"
     pst = spinup_freyberg(tmp_path)
-    vh = ppv.VisHandler(pst, wd=m_d)
+    vh = ppv.VisHandler(pst, wd=m_d, crs="epsg:32614")
+    vh.layer_selector.value='1'
+    vh.map_obs_selector.value='trgw'
+    assert vh.layer_selector.value=='all'
+    vh.on_map_click(vh.map_widget.data[1], callbacks.Points(point_inds=[20]), None)
+
+    vh.map_obs_selector.value='hdar'
+    assert vh.layer_selector.value=='0'
+
+    # check unmap
+
+
     z = vh.map_widget.data[0].z[sel]
     vh.map_temporal_slider.value = 1
     z2 = vh.map_widget.data[0].z[sel]
@@ -71,6 +84,11 @@ def test_freyberg(tmp_path):
     selval5 = _check_selval(vh, sel)
     assert selval5 != selval4 # should have changed
     assert selval5 == selval2  # should have changed
+
+    vh.map_obs_selector.value = 'trgw'
+    vh.on_map_click(vh.map_widget.data[1], callbacks.Points(point_inds=[0]), None)
+
+    pass
 
 
 def test_nounmap(tmp_path):
@@ -121,6 +139,20 @@ def test_no_t(tmp_path):
     vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[10]), None)
 
 
+def num2str(x):
+    import string
+    alpha = string.ascii_lowercase
+    try:
+        if np.isnan(x):
+            return x
+        if x < 26:
+            return alpha[x]
+        else:
+            return num2str(x//26 - 1) + alpha[x%26]
+    except TypeError:
+        return x
+
+
 def test_t_str(tmp_path):
     # testing (some) strings in time col
     from plotly import callbacks
@@ -128,10 +160,18 @@ def test_t_str(tmp_path):
     pst = spinup_freyberg(tmp_path)
     obs = pst.observation_data
     obs = obs.loc[(obs.kper == '0') |
+                  (obs.oname=='sfr'), :]
+    idxs = obs.loc[(obs.kper == '0') |
                   ((obs.oname=='sfr') &
-                   (obs.time=='1')), :]
-    obs['time'].iloc[0] = 'one'
-    obs['time'].iloc[3] = 'two'
+                   (obs.time=='1')), :].index
+    otime = obs.time.astype("Int32").to_list()
+    obs['time'] = [num2str(x) for x in otime]
+
+    # obs = obs.loc[(obs.kper == '0') |
+    #               ((obs.oname=='sfr') &
+    #                (obs.time=='1')), :]
+    # obs['time'].iloc[0] = 'one'
+    obs.loc[idxs[3], 'time'] = 'two'
     pst.observation_data = obs
     sel = 10
     vh = ppv.VisHandler(pst, wd=m_d)
@@ -150,6 +190,7 @@ def test_t_str(tmp_path):
     z2 = vh.map_widget.data[0].z[sel2]
     # new values should be diff to previous layer
     assert z2 != z
+    vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[sel]), None)
 
     # temporal slider to 1 -- should be available in layer 2
     vh.map_temporal_slider.value = 1
@@ -169,6 +210,15 @@ def test_t_str(tmp_path):
     selval = _check_selval(vh, sel)
     # val to should be equiv. to original
     assert selval == z
+
+    vh.unmap_group_selector.value = 'headwater'
+
+    obs['slider'] = otime
+    obs.loc[obs.index[0], 'slider'] = np.nan
+    pst.observation_data = obs
+    sel = 10
+    vh = ppv.VisHandler(pst, wd=m_d, tidx='slider')
+    pass
 
 
 def test_weighted_check(tmp_path):
@@ -237,7 +287,7 @@ def test_no_obsplus(tmp_path):
     vh.on_map_click(vh.map_widget.data[0],
                     callbacks.Points(point_inds=[10]), None)
     selval = _check_selval(vh, 10)
-    obsdatas = [d for d in vh.map_histogram.data if 'obs+plus' in d.name]
+    obsdatas = [d for d in vh.map_histogram.data if 'obs+noise' in d.name]
     for d in obsdatas:
         assert not np.any(d.x), \
             f"obs+noise should be empty for zero weights, check {d.name}"
@@ -248,6 +298,7 @@ def test_lh(tmp_path, option):
     """
     Test the visualization utilities in pyemu.
     """
+    from plotly import callbacks
     m_d = Path("examples", "lheg_ies")
     shutil.copytree(m_d, tmp_path/m_d.name)
     m_d = tmp_path/m_d.name
@@ -259,7 +310,8 @@ def test_lh(tmp_path, option):
                 f.unlink()
     pst = str(m_d / "lhgzsi.pst")
     vh = ppv.VisHandler(pst, wd=m_d, crs='EPSG:2913')
-    vh._sel_cellid = 5408
+    vh.on_map_click(vh.map_widget.data[0], callbacks.Points(point_inds=[3405]), None)
+    assert vh._sel_cellid == 5408
     vh.highlight_cell()
     vh.update_maphisto()
     vh.unmap_group_selector.value = vh.unmap_group_selector.options[vh.unmap_group_selector.index + 1]
@@ -284,10 +336,18 @@ def profile_vis(wd=None, temp=Path('profiling'), crs=None):
         shutil.copytree(wd, m_d, dirs_exist_ok=True)
         pstfname = list(m_d.glob('*.pst'))[0]
         pst = pyemu.Pst(str(pstfname))
+    gpby = None
+    obs = pst.observation_data
+    if 'longname' in obs.columns:
+        obs['obsnme'] = obs.longname
+        obs['obgnme'] = obs.oglong
+        obs.loc[obs['oname'] == 'drn', 'oname'] = obs.loc[obs['oname'] == 'drn'].obgnme.str.split('otype').str[0].str.strip('_oname:')
+        gpby = 'oname'
+
     Path("assets", f"{Path(pst.filename).stem}_modelgrid.json").unlink(missing_ok=True)
     pr = cProfile.Profile()
     pr.enable()
-    vh = ppv.VisHandler(pst, wd=m_d, crs=crs, write_json=True)
+    vh = ppv.VisHandler(pst, wd=m_d, crs=crs, write_json=True, groupby=gpby)
     pr.disable()
     ps = pstats.Stats(pr).sort_stats('cumtime')
     ps.print_stats(40)
@@ -315,7 +375,7 @@ if __name__ == '__main__':
     # test_vis('test')
     # profile_vis(crs="epsg:32614")
     # profile_vis(crs="epsg:32614")
-    alt = dict(wd=Path("..", "..", "ranger_ua", "master_precond"),
+    alt = dict(wd=Path("examples", "tmptest"),
                crs="EPSG:28353")
     profile_vis(**alt)
     pass
