@@ -1483,7 +1483,10 @@ class VisHandler(object):
                 # also get obs (plus noise) info
                 if obsplus is not None:
                     # get obsnames across time
-                    obsplus = obsplus.loc[obsnames, :].set_index(x)
+                    subobsel = [ob in obsplus.index for ob in obsnames]
+                    subobsnames = [ob for ob, sel in zip(obsnames, subobsel) if sel]
+                    opx = x[subobsel]
+                    obsplus = obsplus.loc[subobsnames, :].set_index(x[subobsel])
                     # if just one unique value, then  we dont have an obs+noise ensemble
                     if (obsplus.nunique(axis=1) == 1).all():
                         obsplus = obsplus.iloc[:, [0]]  # slice out single column
@@ -1526,7 +1529,7 @@ class VisHandler(object):
                 leg = True
                 for dfi in obsplus.T.itertuples():
                     lines.append(
-                        go.Scattergl(x=x,
+                        go.Scattergl(x=opx,
                                      y=np.array(dfi[1:]),  # itertuples so 0 is index
                                      name=f"obsval_{dfi[0]}",  # need to be this to pick up in update methods
                                      legendgroup=legendgroup,
